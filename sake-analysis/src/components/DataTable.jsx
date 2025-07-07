@@ -231,11 +231,14 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
     }
     return acc;
   }, {});
+  
   const dailyStats = dailyMetrics.reduce((acc, metric) => {
-    const values = selectedTanksData
-      .flatMap(tank => Object.values(tank.dailyData || {})
+    const values = selectedTanksData.flatMap(tank => {
+      if (!tank.dailyData) return [];
+      return Object.values(tank.dailyData)
         .map(data => data[metric])
-        .filter(v => v !== null && v !== undefined));
+        .filter(v => v !== null && v !== undefined);
+    });
     acc[metric] = {
       avg: values.length ? (values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2) : '-',
       max: values.length ? Math.max(...values).toFixed(2) : '-',
