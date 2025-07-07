@@ -192,6 +192,13 @@ const App = () => {
               >
                 進捗モデリング ({selectedTankIds.length}個のタンクを選択中)
               </button>
+
+              <button
+                onClick={handlePredictionAnalyze}
+                className="px-4 py-2 rounded text-white bg-purple-600 hover:bg-purple-700"
+              >
+                モデリング予測
+              </button>
             </div>
             
             <DataTable 
