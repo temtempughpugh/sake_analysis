@@ -2,6 +2,8 @@ import React, { useState, useEffect, Component } from 'react';
 import DataTable from './components/DataTable';
 import TankSelector from './components/TankSelector';
 import TankGraph from './components/TankGraph';
+import ProgressModeling from './components/ProgressModeling';
+import PredictionModeling from './components/PredictionModeling';
 import { parseCSV } from './utils/csvParser';
 
 // エラーバウンダリコンポーネント
@@ -67,6 +69,8 @@ const App = () => {
   });
   
   const [showGraphs, setShowGraphs] = useState(false);
+  const [showModeling, setShowModeling] = useState(false);
+  const [showPrediction, setShowPrediction] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -96,6 +100,8 @@ const App = () => {
         setTanks(parsedData);
         setSelectedTankIds([]);
         setShowGraphs(false);
+        setShowModeling(false);
+        setShowPrediction(false);
         localStorage.setItem('tanks', JSON.stringify(parsedData));
         localStorage.removeItem('selectedTankIds');
         localStorage.removeItem('graphPeriod');
@@ -111,14 +117,34 @@ const App = () => {
 
   const handleSelectionChange = (selectedIds) => {
     setSelectedTankIds(selectedIds);
-    setShowGraphs(false); // 選択変更時にグラフを一旦非表示
+    setShowGraphs(false);
+    setShowModeling(false);
+    setShowPrediction(false);
   };
 
   const handleAnalyze = () => {
     if (selectedTankIds.length > 0) {
       setError(null);
       setShowGraphs(true);
+      setShowModeling(false);
+      setShowPrediction(false);
     }
+  };
+
+  const handleModelingAnalyze = () => {
+    if (selectedTankIds.length > 0) {
+      setError(null);
+      setShowModeling(true);
+      setShowGraphs(false);
+      setShowPrediction(false);
+    }
+  };
+
+  const handlePredictionAnalyze = () => {
+    setError(null);
+    setShowPrediction(true);
+    setShowGraphs(false);
+    setShowModeling(false);
   };
 
   return (
@@ -142,7 +168,7 @@ const App = () => {
         
         {tanks.length > 0 && !isLoading && (
           <>
-            <div className="mb-4">
+            <div className="mb-4 flex space-x-3">
               <button
                 onClick={handleAnalyze}
                 disabled={selectedTankIds.length === 0}
@@ -152,7 +178,19 @@ const App = () => {
                     : 'bg-blue-600 hover:bg-blue-700'
                 }`}
               >
-                分析 ({selectedTankIds.length}個のタンクを選択中)
+                グラフ分析 ({selectedTankIds.length}個のタンクを選択中)
+              </button>
+              
+              <button
+                onClick={handleModelingAnalyze}
+                disabled={selectedTankIds.length === 0}
+                className={`px-4 py-2 rounded text-white ${
+                  selectedTankIds.length === 0 
+                    ? 'bg-gray-400 cursor-not-allowed' 
+                    : 'bg-green-600 hover:bg-green-700'
+                }`}
+              >
+                進捗モデリング ({selectedTankIds.length}個のタンクを選択中)
               </button>
             </div>
             
@@ -168,6 +206,21 @@ const App = () => {
                   tanks={tanks} 
                   selectedTankIds={selectedTankIds} 
                 />
+              </ErrorBoundary>
+            )}
+
+            {showModeling && (
+              <ErrorBoundary>
+                <ProgressModeling 
+                  tanks={tanks} 
+                  selectedTankIds={selectedTankIds} 
+                />
+              </ErrorBoundary>
+            )}
+
+            {showPrediction && (
+              <ErrorBoundary>
+                <PredictionModeling />
               </ErrorBoundary>
             )}
           </>
