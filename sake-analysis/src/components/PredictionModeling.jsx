@@ -1,5 +1,3 @@
-// このコードを既存の src/components/PredictionModeling.jsx に置き換えてください
-
 import React, { useState, useEffect } from 'react';
 import { Line } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend } from 'chart.js';
@@ -92,7 +90,8 @@ const PredictionModeling = () => {
   // 新しい実測値入力
   const [newMeasurement, setNewMeasurement] = useState({
     day: '',
-    actualBMD: ''
+    actualBMD: '',
+    actualBaume: ''
   });
 
   // モデルから進捗率を補間で取得する関数（改善版）
@@ -210,24 +209,36 @@ const PredictionModeling = () => {
   };
 
   // 実測データを追加
-  const addActualMeasurement = () => {
-    if (!newMeasurement.day || !newMeasurement.actualBMD) return;
-
+  // 実測データを追加
+const addActualMeasurement = () => {
+    if (!newMeasurement.day) return;
+    
+    // BMDまたはボーメのどちらかが入力されていることを確認
+    if (!newMeasurement.actualBMD && !newMeasurement.actualBaume) return;
+  
     const day = parseInt(newMeasurement.day);
-    const actualBMD = parseFloat(newMeasurement.actualBMD);
-    const actualBaume = (actualBMD / day).toFixed(3);
-
+    
+    // BMDとボーメを相互計算
+    let actualBMD, actualBaume;
+    if (newMeasurement.actualBMD) {
+      actualBMD = parseFloat(newMeasurement.actualBMD);
+      actualBaume = (actualBMD / day).toFixed(3);
+    } else {
+      actualBaume = parseFloat(newMeasurement.actualBaume).toFixed(3);
+      actualBMD = (parseFloat(actualBaume) * day);
+    }
+  
     // 理想値を取得
     const idealPoint = idealCurve.find(p => p.day === day);
     let difference = null;
     let status = '';
-
+  
     if (idealPoint) {
       difference = (actualBMD - parseFloat(idealPoint.idealBMD)).toFixed(2);
       const diffNum = parseFloat(difference);
       status = diffNum > 2 ? '大幅遅れ' : diffNum > 0.5 ? '遅れ' : diffNum < -2 ? '大幅進み' : diffNum < -0.5 ? '進み' : '順調';
     }
-
+  
     const newData = {
       day,
       actualBMD: actualBMD.toFixed(2),
@@ -237,19 +248,15 @@ const PredictionModeling = () => {
       difference,
       status
     };
-
-    setActualData(prev => [...prev.filter(d => d.day !== day), newData].sort((a, b) => a.day - b.day));
-    setNewMeasurement({ day: '', actualBMD: '' });
-    
-    // 実測データが追加されたら予測を自動実行
-    if (actualData.length >= 0) {
-      calculatePrediction();
-    }
+  
+    const updatedActualData = [...actualData.filter(d => d.day !== day), newData].sort((a, b) => a.day - b.day);
+    setActualData(updatedActualData);
+    setNewMeasurement({ day: '', actualBMD: '', actualBaume: '' });
   };
 
-  // 予測計算
-  const calculatePrediction = () => {
-    if (!idealCurve || actualData.length === 0) return;
+  // 予測計算 - actualDataの変更を受けて実行されるように修正
+  const calculatePrediction = (currentActualData) => {
+    if (!idealCurve || !currentActualData || currentActualData.length === 0) return;
 
     const maxBMD = parseFloat(baseSettings.maxBMD);
     const finalBMD = parseFloat(baseSettings.finalBMD);
@@ -257,7 +264,7 @@ const PredictionModeling = () => {
     const finalDay = parseInt(baseSettings.finalDay);
 
     // 最新の実測データ
-    const latestData = actualData[actualData.length - 1];
+    const latestData = currentActualData[currentActualData.length - 1];
     const currentDay = latestData.day;
     const currentBMD = parseFloat(latestData.actualBMD);
 
@@ -337,6 +344,14 @@ const PredictionModeling = () => {
       }
     });
   };
+
+  // actualDataが変更されたら自動で予測を実行
+  useEffect(() => {
+    if (actualData.length > 0 && idealCurve.length > 0) {
+      calculatePrediction(actualData);
+    }
+  }, [actualData, idealCurve, baseSettings, selectedModel]);
+
   const getChartData = () => {
     const datasets = [];
 
@@ -365,6 +380,42 @@ const PredictionModeling = () => {
         pointRadius: 4,
         pointHoverRadius: 6,
         showLine: false
+      });
+    }
+
+    // パターンA（現状ペース継続）- 赤色点線
+    if (predictionResult?.patternA?.data?.length > 0) {
+      datasets.push({
+        label: '予測A（現状ペース継続）',
+        data: predictionResult.patternA.data.map(p => ({ 
+          x: p.day, 
+          y: parseFloat(p.predictedBMD) 
+        })),
+        borderColor: '#EF4444',
+        backgroundColor: '#EF4444',
+        borderWidth: 2,
+        borderDash: [5, 5],
+        fill: false,
+        tension: 0.3,
+        pointRadius: 2
+      });
+    }
+
+    // パターンB（目標日数厳守）- 紫色点線
+    if (predictionResult?.patternB?.data?.length > 0) {
+      datasets.push({
+        label: '予測B（目標日数厳守）',
+        data: predictionResult.patternB.data.map(p => ({ 
+          x: p.day, 
+          y: parseFloat(p.predictedBMD) 
+        })),
+        borderColor: '#8B5CF6',
+        backgroundColor: '#8B5CF6',
+        borderWidth: 2,
+        borderDash: [8, 3],
+        fill: false,
+        tension: 0.3,
+        pointRadius: 2
       });
     }
 
@@ -428,6 +479,7 @@ const PredictionModeling = () => {
                   setSelectedModel(model);
                   setIdealCurve([]);
                   setActualData([]);
+                  setPredictionResult(null);
                 }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
               >
@@ -484,193 +536,233 @@ const PredictionModeling = () => {
         </div>
 
         {/* ステップ2: 基準設定 */}
-        {selectedModel && (
-          <div className="mb-6">
-            <h2 className="text-lg font-semibold mb-4 flex items-center">
-              <TrendingUp className="w-5 h-5 mr-2 text-purple-600" />
-              ステップ2: 発酵基準設定
-            </h2>
-            
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  最高BMD
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={baseSettings.maxBMD}
-                  onChange={(e) => setBaseSettings(prev => ({ ...prev, maxBMD: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
-                  placeholder="35.0"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  最高BMD日
-                </label>
-                <input
-                  type="number"
-                  value={baseSettings.maxBMDDay}
-                  onChange={(e) => setBaseSettings(prev => ({ ...prev, maxBMDDay: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
-                  placeholder="8"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  最終BMD
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={baseSettings.finalBMD}
-                  onChange={(e) => setBaseSettings(prev => ({ ...prev, finalBMD: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
-                  placeholder="-30.0"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  最終日
-                </label>
-                <input
-                  type="number"
-                  value={baseSettings.finalDay}
-                  onChange={(e) => setBaseSettings(prev => ({ ...prev, finalDay: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
-                  placeholder="26"
-                />
-              </div>
-            </div>
+{selectedModel && (
+  <div className="mb-6">
+    <h2 className="text-lg font-semibold mb-4 flex items-center">
+      <TrendingUp className="w-5 h-5 mr-2 text-purple-600" />
+      ステップ2: 発酵基準設定
+    </h2>
+    
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          最高BMD
+        </label>
+        <input
+          type="number"
+          step="0.1"
+          value={baseSettings.maxBMD}
+          onChange={(e) => setBaseSettings(prev => ({ ...prev, maxBMD: e.target.value }))}
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+          placeholder="35.0"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          最高BMD日
+        </label>
+        <input
+          type="number"
+          value={baseSettings.maxBMDDay}
+          onChange={(e) => setBaseSettings(prev => ({ ...prev, maxBMDDay: e.target.value }))}
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+          placeholder="8"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          最終BMD
+        </label>
+        <input
+          type="number"
+          step="0.1"
+          value={baseSettings.finalBMD}
+          onChange={(e) => setBaseSettings(prev => ({ ...prev, finalBMD: e.target.value }))}
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+          placeholder="-30.0"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          最終日
+        </label>
+        <input
+          type="number"
+          value={baseSettings.finalDay}
+          onChange={(e) => setBaseSettings(prev => ({ ...prev, finalDay: e.target.value }))}
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+          placeholder="26"
+        />
+      </div>
+    </div>
 
-            <button
-              onClick={createIdealCurve}
-              disabled={!selectedModel || !baseSettings.maxBMD || !baseSettings.finalBMD || 
-                       !baseSettings.maxBMDDay || !baseSettings.finalDay}
-              className="w-full px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              理想発酵曲線を作成
-            </button>
-          </div>
-        )}
+    <button
+      onClick={createIdealCurve}
+      disabled={!selectedModel || !baseSettings.maxBMD || !baseSettings.finalBMD || 
+               !baseSettings.maxBMDDay || !baseSettings.finalDay}
+      className="w-full px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+    >
+      理想発酵曲線を作成
+    </button>
+  </div>
+)}
 
         {/* ステップ3: 理想曲線表示と実測値入力 */}
-        {idealCurve.length > 0 && (
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            {/* 理想発酵進捗表 */}
-            <div className="xl:col-span-2">
-              <h3 className="text-lg font-semibold mb-4 flex items-center">
-                <BarChart3 className="w-5 h-5 mr-2 text-green-600" />
-                理想発酵進捗表
-              </h3>
-              
-              <div className="overflow-x-auto bg-gray-50 rounded-lg">
-                <table className="w-full text-sm">
-                  <thead className="bg-green-100">
-                    <tr>
-                      <th className="px-3 py-2 text-left">日数</th>
-                      <th className="px-3 py-2 text-right">時間進行度</th>
-                      <th className="px-3 py-2 text-right">発酵完了率</th>
-                      <th className="px-3 py-2 text-right">理想BMD</th>
-                      <th className="px-3 py-2 text-right">理想ボーメ</th>
-                      <th className="px-3 py-2 text-center">実測BMD</th>
-                      <th className="px-3 py-2 text-center">差分</th>
-                      <th className="px-3 py-2 text-center">状況</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {idealCurve.map((point) => {
-                      const actualPoint = actualData.find(a => a.day === point.day);
-                      return (
-                        <tr key={point.day} className={`hover:bg-gray-50 ${actualPoint ? 'bg-blue-50' : ''}`}>
-                          <td className="px-3 py-2 font-medium">{point.day}日</td>
-                          <td className="px-3 py-2 text-right">{point.fermentationProgress}%</td>
-                          <td className="px-3 py-2 text-right">{point.expectedProgressRate}%</td>
-                          <td className="px-3 py-2 text-right font-mono">{point.idealBMD}</td>
-                          <td className="px-3 py-2 text-right font-mono">{point.idealBaume}</td>
-                          <td className="px-3 py-2 text-center font-mono">
-                            {actualPoint ? actualPoint.actualBMD : '-'}
-                          </td>
-                          <td className="px-3 py-2 text-center font-mono">
-                            {actualPoint ? (
-                              <span className={`${
-                                parseFloat(actualPoint.difference) > 0 ? 'text-red-600' : 
-                                parseFloat(actualPoint.difference) < 0 ? 'text-blue-600' : 'text-green-600'
-                              }`}>
-                                {actualPoint.difference > 0 ? '+' : ''}{actualPoint.difference}
-                              </span>
-                            ) : '-'}
-                          </td>
-                          <td className="px-3 py-2 text-center">
-                            {actualPoint ? (
-                              <span className={`px-2 py-1 rounded text-xs ${
-                                actualPoint.status === '大幅遅れ' ? 'bg-red-200 text-red-800' :
-                                actualPoint.status === '遅れ' ? 'bg-orange-200 text-orange-800' :
-                                actualPoint.status === '大幅進み' ? 'bg-blue-200 text-blue-800' :
-                                actualPoint.status === '進み' ? 'bg-cyan-200 text-cyan-800' :
-                                'bg-green-200 text-green-800'
-                              }`}>
-                                {actualPoint.status}
-                              </span>
-                            ) : '-'}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+{idealCurve.length > 0 && (
+  <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+    {/* 理想発酵進捗表 - 幅を縮小 */}
+    <div className="xl:col-span-2">
+      <h3 className="text-lg font-semibold mb-4 flex items-center">
+        <BarChart3 className="w-5 h-5 mr-2 text-green-600" />
+        理想発酵進捗表
+      </h3>
+      
+      <div className="overflow-x-auto bg-gray-50 rounded-lg">
+        <table className="w-full text-xs">
+          <thead className="bg-green-100">
+            <tr>
+              <th className="px-2 py-2 text-left">日数</th>
+              <th className="px-2 py-2 text-right">進行度</th>
+              <th className="px-2 py-2 text-right">完了率</th>
+              <th className="px-2 py-2 text-right">理想BMD</th>
+              <th className="px-2 py-2 text-center">実測BMD</th>
+              <th className="px-2 py-2 text-center">差分</th>
+              <th className="px-2 py-2 text-center">状況</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {idealCurve.map((point) => {
+              const actualPoint = actualData.find(a => a.day === point.day);
+              return (
+                <tr key={point.day} className={`hover:bg-gray-50 ${actualPoint ? 'bg-blue-50' : ''}`}>
+                  <td className="px-2 py-1 font-medium">{point.day}日</td>
+                  <td className="px-2 py-1 text-right">{point.fermentationProgress}%</td>
+                  <td className="px-2 py-1 text-right">{point.expectedProgressRate}%</td>
+                  <td className="px-2 py-1 text-right font-mono text-xs">{point.idealBMD}</td>
+                  <td className="px-2 py-1 text-center font-mono text-xs">
+                    {actualPoint ? actualPoint.actualBMD : '-'}
+                  </td>
+                  <td className="px-2 py-1 text-center font-mono text-xs">
+                    {actualPoint ? (
+                      <span className={`${
+                        parseFloat(actualPoint.difference) > 0 ? 'text-red-600' : 
+                        parseFloat(actualPoint.difference) < 0 ? 'text-blue-600' : 'text-green-600'
+                      }`}>
+                        {actualPoint.difference > 0 ? '+' : ''}{actualPoint.difference}
+                      </span>
+                    ) : '-'}
+                  </td>
+                  <td className="px-2 py-1 text-center">
+                    {actualPoint ? (
+                      <span className={`px-1 py-0.5 rounded text-xs ${
+                        actualPoint.status === '大幅遅れ' ? 'bg-red-200 text-red-800' :
+                        actualPoint.status === '遅れ' ? 'bg-orange-200 text-orange-800' :
+                        actualPoint.status === '大幅進み' ? 'bg-blue-200 text-blue-800' :
+                        actualPoint.status === '進み' ? 'bg-cyan-200 text-cyan-800' :
+                        'bg-green-200 text-green-800'
+                      }`}>
+                        {actualPoint.status}
+                      </span>
+                    ) : '-'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {/* 右側: グラフと実測値入力 - 幅を拡大 */}
+    <div className="xl:col-span-3 space-y-6">
+      {/* BMD推移グラフ - 大幅に拡大 */}
+      <div className="bg-white border border-gray-200 rounded-lg p-4">
+        <h4 className="font-semibold text-gray-800 mb-3">BMD推移 & 予測グラフ</h4>
+        <div className="h-96">
+          <Line data={getChartData()} options={chartOptions} />
+        </div>
+      </div>
+
+      {/* 実測値入力 */}
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+        <h4 className="font-semibold text-yellow-800 mb-3">実測データ入力</h4>
+        <div className="grid grid-cols-1 gap-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              日数
+            </label>
+            <input
+              type="number"
+              value={newMeasurement.day}
+              onChange={(e) => {
+                const day = e.target.value;
+                setNewMeasurement(prev => ({ 
+                  ...prev, 
+                  day,
+                  // 日数が変更されたら、BMDがある場合はボーメを再計算
+                  actualBaume: day && prev.actualBMD ? (parseFloat(prev.actualBMD) / parseFloat(day)).toFixed(3) : prev.actualBaume
+                }));
+              }}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-yellow-500"
+              placeholder="12"
+            />
+          </div>
+          
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                実測BMD
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={newMeasurement.actualBMD}
+                onChange={(e) => {
+                  const bmd = e.target.value;
+                  setNewMeasurement(prev => ({ 
+                    ...prev, 
+                    actualBMD: bmd,
+                    // BMDが変更されたら、日数がある場合はボーメを自動計算
+                    actualBaume: bmd && prev.day ? (parseFloat(bmd) / parseFloat(prev.day)).toFixed(3) : ''
+                  }));
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-yellow-500"
+                placeholder="33.6"
+              />
             </div>
-
-            {/* 右側: グラフと実測値入力 */}
-            <div className="space-y-6">
-              {/* 実測値入力 */}
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                <h4 className="font-semibold text-yellow-800 mb-3">実測データ入力</h4>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      日数
-                    </label>
-                    <input
-                      type="number"
-                      value={newMeasurement.day}
-                      onChange={(e) => setNewMeasurement(prev => ({ ...prev, day: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-yellow-500"
-                      placeholder="12"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      実測BMD
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={newMeasurement.actualBMD}
-                      onChange={(e) => setNewMeasurement(prev => ({ ...prev, actualBMD: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-yellow-500"
-                      placeholder="33.6"
-                    />
-                  </div>
-                  <button
-                    onClick={addActualMeasurement}
-                    disabled={!newMeasurement.day || !newMeasurement.actualBMD}
-                    className="w-full px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:bg-gray-400"
-                  >
-                    データ追加
-                  </button>
-                </div>
-              </div>
-
-              {/* BMD推移グラフ */}
-              <div className="bg-white border border-gray-200 rounded-lg p-4">
-                <h4 className="font-semibold text-gray-800 mb-3">理想BMD経過グラフ</h4>
-                <div className="h-64">
-                  <Line data={getChartData()} options={chartOptions} />
-                </div>
-              </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                実測ボーメ
+              </label>
+              <input
+                type="number"
+                step="0.001"
+                value={newMeasurement.actualBaume || ''}
+                onChange={(e) => {
+                  const baume = e.target.value;
+                  setNewMeasurement(prev => ({ 
+                    ...prev, 
+                    actualBaume: baume,
+                    // ボーメが変更されたら、日数がある場合はBMDを自動計算
+                    actualBMD: baume && prev.day ? (parseFloat(baume) * parseFloat(prev.day)).toFixed(2) : ''
+                  }));
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-yellow-500"
+                placeholder="2.800"
+              />
+            </div>
+          </div>
+        </div>
+        
+        <button
+          onClick={addActualMeasurement}
+          disabled={!newMeasurement.day || (!newMeasurement.actualBMD && !newMeasurement.actualBaume)}
+          className="w-full mt-3 px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:bg-gray-400"
+        >
+          データ追加
+        </button>
+      </div>
             </div>
           </div>
         )}
