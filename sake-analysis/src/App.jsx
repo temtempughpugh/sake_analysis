@@ -4,6 +4,7 @@ import TankSelector from './components/TankSelector';
 import TankGraph from './components/TankGraph';
 import ProgressModeling from './components/ProgressModeling';
 import PredictionModeling from './components/PredictionModeling';
+import TrueAlcoholCoefficient from './components/TrueAlcoholCoefficient';
 import { parseCSV } from './utils/csvParser';
 import { Upload, ChevronDown, ChevronUp, Database, BarChart3 } from 'lucide-react';
 
@@ -490,6 +491,16 @@ const App = () => {
                       />
                     </div>
                   </div>
+                </ErrorBoundary>
+              )}
+
+              {/* 5.5. 真のアルコール係数分析 - 新しく追加 */}
+              {showGraphs && (
+                <ErrorBoundary>
+                  <TrueAlcoholCoefficient 
+                    tanks={tanks} 
+                    selectedTankIds={selectedTankIds} 
+                  />
                 </ErrorBoundary>
               )}
 
