@@ -35,7 +35,7 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
     { key: '最終アルコール度数', label: '最終アルコール', fixed: false, isNumeric: true },
     { key: '最高BMD', label: '最高BMD', fixed: false, isNumeric: true },
     { key: '最高BMD日数', label: '最高BMD日数', fixed: false, isNumeric: true },
-    // 真のアルコール係数を最高BMD日数と追い水総量の間に追加
+    // 真のアルコール係数を追加（最高BMD日数と追い水総量の間）
     { key: 'true_alcohol_coeff_with_water', label: '真のアルコール係数①', fixed: false, isNumeric: true },
     { key: 'true_alcohol_coeff_without_water', label: '真のアルコール係数②', fixed: false, isNumeric: true },
     { key: '追い水総量', label: '追い水総量', fixed: false, isNumeric: true },
@@ -223,9 +223,30 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
   const selectedTanksData = tanks.filter(tank => selectedTankIds.includes(tank.tankId));
   const metaStats = columns.reduce((acc, col) => {
     if (col.isNumeric) {
-      const values = selectedTanksData
-        .map(tank => tank.metadata[col.key])
-        .filter(v => v !== null && v !== undefined);
+      let values;
+      
+      // 真のアルコール係数の場合は特別な処理
+      if (col.key === 'true_alcohol_coeff_with_water') {
+        values = selectedTanksData
+          .map(tank => {
+            const result = calculateTrueCoefficientsFromMeta(tank);
+            return result.withWater;
+          })
+          .filter(v => v !== null && v !== undefined && !isNaN(v));
+      } else if (col.key === 'true_alcohol_coeff_without_water') {
+        values = selectedTanksData
+          .map(tank => {
+            const result = calculateTrueCoefficientsFromMeta(tank);
+            return result.withoutWater;
+          })
+          .filter(v => v !== null && v !== undefined && !isNaN(v));
+      } else {
+        // 通常のメタデータ項目
+        values = selectedTanksData
+          .map(tank => tank.metadata[col.key])
+          .filter(v => v !== null && v !== undefined);
+      }
+      
       acc[col.key] = {
         avg: values.length ? (values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2) : '-',
         max: values.length ? Math.max(...values).toFixed(2) : '-',
