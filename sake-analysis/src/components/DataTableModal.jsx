@@ -189,20 +189,64 @@ const DataTableModal = ({ isOpen, onClose, tanks, onSelectionChange, selectedTan
     }
   };
 
-  const multiSort = (tanks) => {
-    if (sortConfigs.length === 0) return tanks;
+  const multiSort = (data) => {
+    if (sortConfigs.length === 0) return data;
     
-    return [...tanks].sort((a, b) => {
-      for (const config of sortConfigs) {
-        const aVal = a.metadata[config.key];
-        const bVal = b.metadata[config.key];
+    console.log('=== MULTISORT DEBUG ===');
+    console.log('sortConfigs:', sortConfigs);
+    console.log('data length:', data.length);
+    
+    return [...data].sort((a, b) => {
+      for (const { key, direction } of sortConfigs) {
+        console.log('Sorting by key:', key, 'direction:', direction);
         
-        let comparison = 0;
-        if (aVal < bVal) comparison = -1;
-        else if (aVal > bVal) comparison = 1;
+        let aValue, bValue;
         
-        if (comparison !== 0) {
-          return config.direction === 'asc' ? comparison : -comparison;
+        try {
+          // 真のアルコール係数の場合は計算で取得
+          if (key === 'true_alcohol_coeff_with_water') {
+            console.log('Calculating true_alcohol_coeff_with_water for tanks:', a.tankId, b.tankId);
+            const aResult = calculateTrueCoefficientsFromMeta(a);
+            const bResult = calculateTrueCoefficientsFromMeta(b);
+            aValue = aResult.withWater;
+            bValue = bResult.withWater;
+            console.log('Calculated values:', aValue, bValue);
+          } else if (key === 'true_alcohol_coeff_without_water') {
+            console.log('Calculating true_alcohol_coeff_without_water for tanks:', a.tankId, b.tankId);
+            const aResult = calculateTrueCoefficientsFromMeta(a);
+            const bResult = calculateTrueCoefficientsFromMeta(b);
+            aValue = aResult.withoutWater;
+            bValue = bResult.withoutWater;
+            console.log('Calculated values:', aValue, bValue);
+          } else {
+            // 通常のメタデータ項目
+            aValue = a.metadata[key];
+            bValue = b.metadata[key];
+          }
+          
+          // null/undefined の処理
+          if (aValue === null && bValue === null) continue;
+          if (aValue === null) return 1;
+          if (bValue === null) return -1;
+          
+          let comparison = 0;
+          const isNumeric = columns.find(col => col.key === key).isNumeric;
+          if (isNumeric) {
+            comparison = aValue - bValue;
+          } else {
+            comparison = String(aValue).localeCompare(String(bValue));
+          }
+          
+          console.log('Comparison result:', comparison, 'direction:', direction);
+          
+          if (comparison !== 0) {
+            const result = direction === 'asc' ? comparison : -comparison;
+            console.log('Final sort result:', result);
+            return result;
+          }
+        } catch (error) {
+          console.error('Error in multiSort for key:', key, error);
+          return 0; // エラーが起きた場合は順序を変えない
         }
       }
       return 0;

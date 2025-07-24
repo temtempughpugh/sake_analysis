@@ -1,6 +1,63 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Database, ChevronDown, ArrowUp, ArrowDown } from 'lucide-react';
 
+
+const calculateTrueCoefficientsFromMeta = (tank) => {
+  const metadata = tank.metadata || {};
+  
+  console.log('=== META DEBUG for tank', tank.tankId, '===');
+  console.log('All metadata keys:', Object.keys(metadata));
+  console.log('AB開始ボーメ:', metadata['AB開始ボーメ']);
+  console.log('AB開始アルコール:', metadata['AB開始アルコール']);
+  console.log('最終ボーメ:', metadata['最終ボーメ']);
+  console.log('最終アルコール度数:', metadata['最終アルコール度数']);
+  console.log('仕込み総量:', metadata['仕込み総量']);
+  console.log('追い水総量:', metadata['追い水総量']);
+  
+  const startBaume = parseFloat(metadata['AB開始ボーメ']);
+  const startAlcohol = parseFloat(metadata['AB開始アルコール']);
+  const finalBaume = parseFloat(metadata['最終ボーメ']);
+  const finalAlcohol = parseFloat(metadata['最終アルコール度数']);
+  const totalVolume = parseFloat(metadata['仕込み総量']);
+  const totalWater = parseFloat(metadata['追い水総量']) || 0;
+  
+  console.log('Parsed values:', {
+    startBaume, startAlcohol, finalBaume, finalAlcohol, totalVolume, totalWater
+  });
+  
+  if (isNaN(startBaume) || isNaN(startAlcohol) || isNaN(finalBaume) || isNaN(finalAlcohol) || isNaN(totalVolume)) {
+    console.log('Missing required data, returning null');
+    return { withWater: null, withoutWater: null };
+  }
+  
+  // ①追い水反映（希釈効果を除去）
+  const dilutionFactor = (totalVolume + totalWater) / totalVolume;
+  const trueFinalBaumeWithWater = finalBaume * dilutionFactor;
+  const trueFinalAlcoholWithWater = finalAlcohol * dilutionFactor;
+  
+  const baumeChangeWithWater = startBaume - trueFinalBaumeWithWater;
+  const alcoholChangeWithWater = trueFinalAlcoholWithWater - startAlcohol;
+  
+  const coefficientWithWater = baumeChangeWithWater > 0 ? alcoholChangeWithWater / baumeChangeWithWater : null;
+  
+  // ②追い水無視（そのまま）
+  const baumeChangeWithoutWater = startBaume - finalBaume;
+  const alcoholChangeWithoutWater = finalAlcohol - startAlcohol;
+  
+  const coefficientWithoutWater = baumeChangeWithoutWater > 0 ? alcoholChangeWithoutWater / baumeChangeWithoutWater : null;
+  
+  console.log('Calculated coefficients:', {
+    withWater: coefficientWithWater,
+    withoutWater: coefficientWithoutWater
+  });
+  console.log('=== END META DEBUG ===');
+  
+  return {
+    withWater: coefficientWithWater,
+    withoutWater: coefficientWithoutWater
+  };
+};
+
 const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
   const [sortConfigs, setSortConfigs] = useState(() => {
     const saved = localStorage.getItem('sortConfigs');
@@ -163,20 +220,42 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
 
   const multiSort = (data) => {
     if (sortConfigs.length === 0) return data;
+    
     return [...data].sort((a, b) => {
       for (const { key, direction } of sortConfigs) {
-        const aValue = a.metadata[key];
-        const bValue = b.metadata[key];
-        if (aValue === null && bValue === null) continue;
-        if (aValue === null) return 1;
-        if (bValue === null) return -1;
-        let comparison = 0;
-        const isNumeric = columns.find(col => col.key === key).isNumeric;
-        if (isNumeric) {
-          comparison = aValue - bValue;
+        let aValue, bValue;
+        
+        if (key === 'true_alcohol_coeff_with_water') {
+          try {
+            const aResult = calculateTrueCoefficientsFromMeta(a);
+            const bResult = calculateTrueCoefficientsFromMeta(b);
+            aValue = aResult ? aResult.withWater : null;
+            bValue = bResult ? bResult.withWater : null;
+          } catch (e) {
+            aValue = null;
+            bValue = null;
+          }
+        } else if (key === 'true_alcohol_coeff_without_water') {
+          try {
+            const aResult = calculateTrueCoefficientsFromMeta(a);
+            const bResult = calculateTrueCoefficientsFromMeta(b);
+            aValue = aResult ? aResult.withoutWater : null;
+            bValue = bResult ? bResult.withoutWater : null;
+          } catch (e) {
+            aValue = null;
+            bValue = null;
+          }
         } else {
-          comparison = String(aValue).localeCompare(String(bValue));
+          aValue = a.metadata[key];
+          bValue = b.metadata[key];
         }
+        
+        // null処理
+        if (aValue == null && bValue == null) continue;
+        if (aValue == null) return 1;
+        if (bValue == null) return -1;
+        
+        const comparison = Number(aValue) - Number(bValue);
         if (comparison !== 0) return direction === 'asc' ? comparison : -comparison;
       }
       return 0;
@@ -184,9 +263,11 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
   };
 
   const handleSortFromMenu = (key, direction) => {
+    console.log('handleSortFromMenu called:', key, direction);
     setSortConfigs(prev => {
       const newConfigs = prev.filter(config => config.key !== key);
       newConfigs.push({ key, direction });
+      console.log('New sortConfigs:', newConfigs);
       return newConfigs;
     });
   };
@@ -206,16 +287,45 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
 
   const handleFilterButtonClick = (e, colKey) => {
     const th = e.currentTarget.closest('th');
-    const rect = th.getBoundingClientRect();
-    const left = rect.left + window.scrollX;
-    const top = rect.bottom + window.scrollY;
-    setFilterPosition({
-      left: Math.min(left, window.innerWidth - 200),
-      top
-    });
+    const rect = th.getBoundingClientRect(); // これで画面上の絶対位置が取得される
+    
+    // フィルターポップアップのサイズ
+    const popupWidth = 250;
+    const popupHeight = 300;
+    
+    // 画面サイズを取得
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    
+    // 基本位置（ヘッダーの直下、画面上の絶対位置）
+    let left = rect.left;
+    let top = rect.bottom;
+    
+    // 右端がはみ出る場合は左にずらす
+    if (left + popupWidth > viewportWidth) {
+      left = viewportWidth - popupWidth - 10;
+    }
+    
+    // 下端がはみ出る場合は上に表示
+    if (top + popupHeight > viewportHeight) {
+      top = rect.top - popupHeight - 5; // ヘッダーの上に表示
+    }
+    
+    // 左端がはみ出る場合の調整
+    if (left < 10) {
+      left = 10;
+    }
+    
+    // 上端がはみ出る場合の調整
+    if (top < 10) {
+      top = 10;
+    }
+    
+    setFilterPosition({ left, top });
     setActiveFilter(activeFilter === colKey ? null : colKey);
     setFilterSearch('');
   };
+
 
   const processedTanks = multiSort(getFilteredTanks());
 
@@ -438,14 +548,29 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
                   />
                 </td>
                 {columns.map(col => (
-                  <td
-                    key={col.key}
-                    className={`border border-gray-200 p-2 ${col.fixed ? 'sticky z-5 bg-inherit' : ''}`}
-                    style={{ minWidth: '100px', left: col.fixed ? `${50 + columns.filter(c => c.fixed && columns.indexOf(c) < columns.indexOf(col)).length * 100}px` : 'auto' }}
-                  >
-                    {tank.metadata[col.key] ?? '-'}
-                  </td>
-                ))}
+  <td
+    key={col.key}
+    className={`border border-gray-200 p-2 ${col.fixed ? 'sticky z-5 bg-inherit' : ''}`}
+    style={{ minWidth: '100px', left: col.fixed ? `${50 + columns.filter(c => c.fixed && columns.indexOf(c) < columns.indexOf(col)).length * 100}px` : 'auto' }}
+  >
+    {(() => {
+      // 真のアルコール係数①の場合
+      if (col.key === 'true_alcohol_coeff_with_water') {
+        const result = calculateTrueCoefficientsFromMeta(tank);
+        return result.withWater !== null ? result.withWater.toFixed(3) : '-';
+      } 
+      // 真のアルコール係数②の場合
+      else if (col.key === 'true_alcohol_coeff_without_water') {
+        const result = calculateTrueCoefficientsFromMeta(tank);
+        return result.withoutWater !== null ? result.withoutWater.toFixed(3) : '-';
+      } 
+      // 通常のメタデータ項目
+      else {
+        return tank.metadata[col.key] ?? '-';
+      }
+    })()}
+  </td>
+))}
               </tr>
             ))}
           </tbody>
