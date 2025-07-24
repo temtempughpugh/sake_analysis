@@ -156,6 +156,81 @@ const App = () => {
     setError(null);
   };
 
+  const calculateTrueCoefficients = (tank) => {
+    console.log('calculateTrueCoefficients called for tank:', tank.tankId);
+    console.log('Tank metadata:', tank.metadata);
+    console.log('Tank dailyData keys:', Object.keys(tank.dailyData || {}));
+    
+    const results = [];
+    const totalVolume = parseFloat(tank.metadata['仕込み総量']) || 3000;
+    console.log('Total volume:', totalVolume);
+    
+    const dailyEntries = Object.entries(tank.dailyData || {})
+      .map(([day, data]) => ({
+        day: parseInt(day),
+        baume: parseFloat(data['ボーメ（補完)']) || null,
+        alcohol: parseFloat(data['アルコール（補完)']) || null,
+        addedWater: parseFloat(data['追水']) || 0
+      }))
+      .filter(entry => entry.baume !== null && entry.alcohol !== null)
+      .sort((a, b) => a.day - b.day);
+
+    console.log('Daily entries with alcohol data:', dailyEntries);
+
+    if (dailyEntries.length === 0) {
+      console.log('No daily entries with both baume and alcohol data');
+      return [];
+    }
+
+    const baseDay = dailyEntries[0];
+    let totalCumulativeWater = 0;
+    Object.entries(tank.dailyData || {}).forEach(([day, data]) => {
+      const dayNum = parseInt(day);
+      const waterAmount = parseFloat(data['追水']) || 0;
+      if (dayNum <= baseDay.day && waterAmount > 0) {
+        totalCumulativeWater += waterAmount;
+      }
+    });
+    
+    dailyEntries.forEach((dayData, index) => {
+      let cumulativeWater = totalCumulativeWater;
+      if (index > 0) {
+        for (let i = 1; i < index; i++) {
+          cumulativeWater += dailyEntries[i].addedWater;
+        }
+      }
+      
+      const dilutionFactor = (totalVolume + cumulativeWater) / totalVolume;
+      const trueBaumeWithWater = dayData.baume * dilutionFactor;
+      const trueAlcoholWithWater = dayData.alcohol * dilutionFactor;
+      
+      let coefficientWithWater = null;
+      let coefficientWithoutWater = null;
+      
+      if (index > 0) {
+        const baseDilutionFactor = (totalVolume + totalCumulativeWater) / totalVolume;
+        const baseBaumeWithWater = baseDay.baume * baseDilutionFactor;
+        const baseAlcoholWithWater = baseDay.alcohol * baseDilutionFactor;
+        
+        const baumeChangeWithWater = baseBaumeWithWater - trueBaumeWithWater;
+        const alcoholChangeWithWater = trueAlcoholWithWater - baseAlcoholWithWater;
+        const baumeChangeWithoutWater = baseDay.baume - dayData.baume;
+        const alcoholChangeWithoutWater = dayData.alcohol - baseDay.alcohol;
+        
+        coefficientWithWater = baumeChangeWithWater > 0 ? alcoholChangeWithWater / baumeChangeWithWater : null;
+        coefficientWithoutWater = baumeChangeWithoutWater > 0 ? alcoholChangeWithoutWater / baumeChangeWithoutWater : null;
+      }
+      
+      results.push({
+        day: dayData.day,
+        withWater: { coefficient: coefficientWithWater },
+        withoutWater: { coefficient: coefficientWithoutWater }
+      });
+    });
+    
+    return results;
+  };
+
   // メタデータ比較コンポーネント
   const MetadataComparison = ({ tanks, selectedTankIds }) => {
     try {
@@ -171,6 +246,23 @@ const App = () => {
         return <p className="text-gray-500">タンクを選択してください</p>;
       }
 
+      // 真のアルコール係数の最終日の値を取得
+      const getTrueAlcoholCoeffFinal = (tank) => {
+        console.log('getTrueAlcoholCoeffFinal for tank:', tank.tankId);
+        const results = calculateTrueCoefficients(tank);
+        console.log('calculateTrueCoefficients results:', results);
+        if (results.length === 0) {
+          console.log('No results from calculateTrueCoefficients');
+          return { withWater: null, withoutWater: null };
+        }
+        const finalResult = results[results.length - 1];
+        console.log('Final result:', finalResult);
+        return {
+          withWater: finalResult.withWater.coefficient,
+          withoutWater: finalResult.withoutWater.coefficient
+        };
+      };
+
       const columns = [
         { key: '順号', label: '順号', isNumeric: true },
         { key: '仕込み規模', label: '仕込み規模', isNumeric: true },
@@ -179,59 +271,85 @@ const App = () => {
         { key: '最高ボーメ', label: '最高ボーメ', isNumeric: true },
         { key: '最終ボーメ', label: '最終ボーメ', isNumeric: true },
         { key: '最終アルコール度数', label: '最終アルコール', isNumeric: true },
+        // 新しく追加：真のアルコール係数
+        { key: 'true_alcohol_coeff_with_water', label: '真のアルコール係数①', isNumeric: true },
+        { key: 'true_alcohol_coeff_without_water', label: '真のアルコール係数②', isNumeric: true },
         { key: '最高BMD', label: '最高BMD', isNumeric: true },
+        { key: '追い水総量', label: '追い水総量', isNumeric: true },
+        { key: '追い水歩合', label: '追い水歩合', isNumeric: true },
       ];
 
-      // 数値項目の統計計算
-      const stats = columns.filter(col => col.isNumeric).reduce((acc, col) => {
-        try {
-          const values = selectedTanks
-            .map(tank => tank.metadata && tank.metadata[col.key])
-            .filter(v => v !== null && v !== undefined && !isNaN(v) && v !== '');
+      const stats = columns.reduce((acc, col) => {
+        if (col.isNumeric) {
+          let values;
           
-          if (values.length > 0) {
-            const numValues = values.map(v => parseFloat(v));
-            acc[col.key] = {
-              avg: (numValues.reduce((sum, v) => sum + v, 0) / numValues.length).toFixed(2),
-              max: Math.max(...numValues).toFixed(2),
-              min: Math.min(...numValues).toFixed(2),
-            };
+          if (col.key === 'true_alcohol_coeff_with_water') {
+            values = selectedTanks
+              .map(tank => getTrueAlcoholCoeffFinal(tank).withWater)
+              .filter(v => v !== null && v !== undefined && !isNaN(v));
+          } else if (col.key === 'true_alcohol_coeff_without_water') {
+            values = selectedTanks
+              .map(tank => getTrueAlcoholCoeffFinal(tank).withoutWater)
+              .filter(v => v !== null && v !== undefined && !isNaN(v));
           } else {
-            acc[col.key] = { avg: '-', max: '-', min: '-' };
+            values = selectedTanks
+              .map(tank => tank.metadata[col.key])
+              .filter(v => v !== null && v !== undefined && !isNaN(v));
           }
-        } catch (error) {
-          console.error(`Error calculating stats for ${col.key}:`, error);
-          acc[col.key] = { avg: 'エラー', max: 'エラー', min: 'エラー' };
+          
+          acc[col.key] = {
+            avg: values.length ? (values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(3) : '-',
+            max: values.length ? Math.max(...values).toFixed(3) : '-',
+            min: values.length ? Math.min(...values).toFixed(3) : '-',
+          };
         }
         return acc;
       }, {});
 
       return (
         <div className="space-y-6">
-          {/* 選択タンク一覧 */}
+          {/* 個別タンクの詳細表 */}
           <div>
-            <h4 className="font-semibold mb-3">選択中のタンク ({selectedTanks.length}個)</h4>
+            <h4 className="font-semibold mb-3">選択タンク詳細</h4>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse border border-gray-200">
+              <table className="w-full text-sm border-collapse border border-gray-300">
                 <thead className="bg-gray-100">
                   <tr>
-                    {columns.map(col => (
-                      <th key={col.key} className="border border-gray-200 p-2 text-left">
+                    {columns.map((col) => (
+                      <th key={col.key} className="border border-gray-300 p-2 text-center font-medium">
                         {col.label}
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {selectedTanks.map((tank, index) => (
-                    <tr key={tank.tankId || index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                      {columns.map(col => (
-                        <td key={col.key} className="border border-gray-200 p-2">
-                          {tank.metadata && tank.metadata[col.key] !== undefined ? tank.metadata[col.key] : '-'}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
+                  {selectedTanks.map((tank, index) => {
+                    const trueCoeffFinal = getTrueAlcoholCoeffFinal(tank);
+                    return (
+                      <tr key={tank.tankId} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        {columns.map((col) => {
+                          let value;
+                          if (col.key === 'true_alcohol_coeff_with_water') {
+                            value = trueCoeffFinal.withWater !== null ? trueCoeffFinal.withWater.toFixed(3) : '-';
+                          } else if (col.key === 'true_alcohol_coeff_without_water') {
+                            value = trueCoeffFinal.withoutWater !== null ? trueCoeffFinal.withoutWater.toFixed(3) : '-';
+                          } else {
+                            value = tank.metadata[col.key];
+                            if (col.isNumeric && value !== null && value !== undefined) {
+                              value = parseFloat(value).toFixed(col.key.includes('歩合') || col.key.includes('割合') ? 3 : 1);
+                            } else if (value === null || value === undefined) {
+                              value = '-';
+                            }
+                          }
+                          return (
+                            <td key={col.key} className="border border-gray-300 p-2 text-center">
+                              {value}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -239,28 +357,38 @@ const App = () => {
 
           {/* 統計サマリー */}
           <div>
-            <h4 className="font-semibold mb-3">統計サマリー</h4>
+            <h4 className="font-semibold mb-3">統計サマリー ({selectedTanks.length}タンク)</h4>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse border border-gray-200">
-                <thead className="bg-blue-50">
+              <table className="w-full text-sm border-collapse border border-gray-300">
+                <thead className="bg-gray-100">
                   <tr>
-                    <th className="border border-gray-200 p-2 text-left">項目</th>
-                    <th className="border border-gray-200 p-2">平均</th>
-                    <th className="border border-gray-200 p-2">最大</th>
-                    <th className="border border-gray-200 p-2">最小</th>
+                    <th className="border border-gray-300 p-2 text-center font-medium">項目</th>
+                    <th className="border border-gray-300 p-2 text-center font-medium">平均</th>
+                    <th className="border border-gray-300 p-2 text-center font-medium">最大</th>
+                    <th className="border border-gray-300 p-2 text-center font-medium">最小</th>
                   </tr>
                 </thead>
                 <tbody>
                   {columns.filter(col => col.isNumeric).map((col, index) => (
                     <tr key={col.key} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                      <td className="border border-gray-200 p-2 font-medium">{col.label}</td>
-                      <td className="border border-gray-200 p-2 text-center">{stats[col.key]?.avg || '-'}</td>
-                      <td className="border border-gray-200 p-2 text-center">{stats[col.key]?.max || '-'}</td>
-                      <td className="border border-gray-200 p-2 text-center">{stats[col.key]?.min || '-'}</td>
+                      <td className="border border-gray-300 p-2 font-medium">{col.label}</td>
+                      <td className="border border-gray-300 p-2 text-center">{stats[col.key]?.avg || '-'}</td>
+                      <td className="border border-gray-300 p-2 text-center">{stats[col.key]?.max || '-'}</td>
+                      <td className="border border-gray-300 p-2 text-center">{stats[col.key]?.min || '-'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+            
+            {/* 真のアルコール係数の説明 */}
+            <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <h5 className="font-semibold text-blue-800 mb-2">真のアルコール係数について</h5>
+              <div className="text-sm text-blue-700 space-y-1">
+                <p>• <strong>①追い水反映</strong>: 追い水による希釈効果を除去して計算した真の発酵効率</p>
+                <p>• <strong>②追い水無視</strong>: 補完データをそのまま使用した従来の計算方法</p>
+                <p>• 最終日の値を表示（ボーメ1度減少あたりのアルコール生成量）</p>
+              </div>
             </div>
           </div>
         </div>

@@ -1,6 +1,63 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Database, ChevronDown, ArrowUp, ArrowDown, X } from 'lucide-react';
 
+const calculateTrueCoefficientsFromMeta = (tank) => {
+  const metadata = tank.metadata || {};
+  
+  console.log('=== META DEBUG for tank', tank.tankId, '===');
+  console.log('All metadata keys:', Object.keys(metadata));
+  console.log('AB開始ボーメ:', metadata['AB開始ボーメ']);
+  console.log('AB開始アルコール:', metadata['AB開始アルコール']);
+  console.log('最終ボーメ:', metadata['最終ボーメ']);
+  console.log('最終アルコール度数:', metadata['最終アルコール度数']);
+  console.log('仕込み総量:', metadata['仕込み総量']);
+  console.log('追い水総量:', metadata['追い水総量']);
+  
+  const startBaume = parseFloat(metadata['AB開始ボーメ']);
+  const startAlcohol = parseFloat(metadata['AB開始アルコール']);
+  const finalBaume = parseFloat(metadata['最終ボーメ']);
+  const finalAlcohol = parseFloat(metadata['最終アルコール度数']);
+  const totalVolume = parseFloat(metadata['仕込み総量']);
+  const totalWater = parseFloat(metadata['追い水総量']) || 0;
+  
+  console.log('Parsed values:', {
+    startBaume, startAlcohol, finalBaume, finalAlcohol, totalVolume, totalWater
+  });
+  
+  if (isNaN(startBaume) || isNaN(startAlcohol) || isNaN(finalBaume) || isNaN(finalAlcohol) || isNaN(totalVolume)) {
+    console.log('Missing required data, returning null');
+    return { withWater: null, withoutWater: null };
+  }
+  
+  // ①追い水反映（希釈効果を除去）
+  const dilutionFactor = (totalVolume + totalWater) / totalVolume;
+  const trueFinalBaumeWithWater = finalBaume * dilutionFactor;
+  const trueFinalAlcoholWithWater = finalAlcohol * dilutionFactor;
+  
+  const baumeChangeWithWater = startBaume - trueFinalBaumeWithWater;
+  const alcoholChangeWithWater = trueFinalAlcoholWithWater - startAlcohol;
+  
+  const coefficientWithWater = baumeChangeWithWater > 0 ? alcoholChangeWithWater / baumeChangeWithWater : null;
+  
+  // ②追い水無視（そのまま）
+  const baumeChangeWithoutWater = startBaume - finalBaume;
+  const alcoholChangeWithoutWater = finalAlcohol - startAlcohol;
+  
+  const coefficientWithoutWater = baumeChangeWithoutWater > 0 ? alcoholChangeWithoutWater / baumeChangeWithoutWater : null;
+  
+  console.log('Calculated coefficients:', {
+    withWater: coefficientWithWater,
+    withoutWater: coefficientWithoutWater
+  });
+  console.log('=== END META DEBUG ===');
+  
+  return {
+    withWater: coefficientWithWater,
+    withoutWater: coefficientWithoutWater
+  };
+};
+
+
 const DataTableModal = ({ isOpen, onClose, tanks, onSelectionChange, selectedTankIds }) => {
   const [sortConfigs, setSortConfigs] = useState(() => {
     const saved = localStorage.getItem('sortConfigs');
@@ -211,7 +268,7 @@ const DataTableModal = ({ isOpen, onClose, tanks, onSelectionChange, selectedTan
   };
 
   const processedTanks = multiSort(getFilteredTanks());
-
+  
   // 比較表用の統計（メタデータ＋日次データ）
   const selectedTanksData = tanks?.filter(tank => selectedTankIds.includes(tank.tankId)) || [];
   const metaStats = columns.reduce((acc, col) => {
@@ -448,7 +505,17 @@ const DataTableModal = ({ isOpen, onClose, tanks, onSelectionChange, selectedTan
                         className={`border border-gray-200 p-2 ${col.fixed ? 'sticky z-5 bg-inherit' : ''}`}
                         style={{ minWidth: '100px', left: col.fixed ? `${50 + columns.filter(c => c.fixed && columns.indexOf(c) < columns.indexOf(col)).length * 100}px` : 'auto' }}
                       >
-                        {tank.metadata[col.key] ?? '-'}
+                        {(() => {
+  if (col.key === 'true_alcohol_coeff_with_water') {
+    const result = calculateTrueCoefficientsFromMeta(tank);
+    return result.withWater !== null ? result.withWater.toFixed(3) : '-';
+  } else if (col.key === 'true_alcohol_coeff_without_water') {
+    const result = calculateTrueCoefficientsFromMeta(tank);
+    return result.withoutWater !== null ? result.withoutWater.toFixed(3) : '-';
+  } else {
+    return tank.metadata[col.key] ?? '-';
+  }
+})()}
                       </td>
                     ))}
                   </tr>

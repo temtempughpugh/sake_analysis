@@ -35,6 +35,9 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
     { key: '最終アルコール度数', label: '最終アルコール', fixed: false, isNumeric: true },
     { key: '最高BMD', label: '最高BMD', fixed: false, isNumeric: true },
     { key: '最高BMD日数', label: '最高BMD日数', fixed: false, isNumeric: true },
+    // 真のアルコール係数を最高BMD日数と追い水総量の間に追加
+    { key: 'true_alcohol_coeff_with_water', label: '真のアルコール係数①', fixed: false, isNumeric: true },
+    { key: 'true_alcohol_coeff_without_water', label: '真のアルコール係数②', fixed: false, isNumeric: true },
     { key: '追い水総量', label: '追い水総量', fixed: false, isNumeric: true },
     { key: '追い水歩合', label: '追い水歩合', fixed: false, isNumeric: true },
     { key: '後半追い水量', label: '後半追い水量', fixed: false, isNumeric: true },

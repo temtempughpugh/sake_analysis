@@ -11,6 +11,72 @@ const colorPalette = [
   '#F7DC6F', '#BB8FCE', '#85C1E2', '#FF99CC', '#66CCCC',
 ];
 
+// 真のアルコール係数計算関数（alcohol_coeffグラフ専用）
+const calculateTrueCoefficients = (tank) => {
+  const results = [];
+  const totalVolume = parseFloat(tank.metadata[COLUMN_NAMES.META.TOTAL_VOLUME]) || 3000;
+  
+  const dailyEntries = Object.entries(tank.dailyData || {})
+    .map(([day, data]) => ({
+      day: parseInt(day),
+      baume: parseFloat(data[COLUMN_NAMES.DAILY.BAUME_ESTIMATED]) || null,
+      alcohol: parseFloat(data[COLUMN_NAMES.DAILY.ALCOHOL_ESTIMATED]) || null,
+      addedWater: parseFloat(data[COLUMN_NAMES.DAILY.WATER]) || 0
+    }))
+    .filter(entry => entry.baume !== null && entry.alcohol !== null)
+    .sort((a, b) => a.day - b.day);
+
+  if (dailyEntries.length === 0) return [];
+
+  const baseDay = dailyEntries[0];
+  let totalCumulativeWater = 0;
+  Object.entries(tank.dailyData || {}).forEach(([day, data]) => {
+    const dayNum = parseInt(day);
+    const waterAmount = parseFloat(data[COLUMN_NAMES.DAILY.WATER]) || 0;
+    if (dayNum <= baseDay.day && waterAmount > 0) {
+      totalCumulativeWater += waterAmount;
+    }
+  });
+  
+  dailyEntries.forEach((dayData, index) => {
+    let cumulativeWater = totalCumulativeWater;
+    if (index > 0) {
+      for (let i = 1; i < index; i++) {
+        cumulativeWater += dailyEntries[i].addedWater;
+      }
+    }
+    
+    const dilutionFactor = (totalVolume + cumulativeWater) / totalVolume;
+    const trueBaumeWithWater = dayData.baume * dilutionFactor;
+    const trueAlcoholWithWater = dayData.alcohol * dilutionFactor;
+    
+    let coefficientWithWater = null;
+    let coefficientWithoutWater = null;
+    
+    if (index > 0) {
+      const baseDilutionFactor = (totalVolume + totalCumulativeWater) / totalVolume;
+      const baseBaumeWithWater = baseDay.baume * baseDilutionFactor;
+      const baseAlcoholWithWater = baseDay.alcohol * baseDilutionFactor;
+      
+      const baumeChangeWithWater = baseBaumeWithWater - trueBaumeWithWater;
+      const alcoholChangeWithWater = trueAlcoholWithWater - baseAlcoholWithWater;
+      const baumeChangeWithoutWater = baseDay.baume - dayData.baume;
+      const alcoholChangeWithoutWater = dayData.alcohol - baseDay.alcohol;
+      
+      coefficientWithWater = baumeChangeWithWater > 0 ? alcoholChangeWithWater / baumeChangeWithWater : null;
+      coefficientWithoutWater = baumeChangeWithoutWater > 0 ? alcoholChangeWithoutWater / baumeChangeWithoutWater : null;
+    }
+    
+    results.push({
+      day: dayData.day,
+      withWater: { coefficient: coefficientWithWater },
+      withoutWater: { coefficient: coefficientWithoutWater }
+    });
+  });
+  
+  return results;
+};
+
 // 列定義をTankGraph内で定義
 const columns = [
   { key: COLUMN_NAMES.META.TANK_NUMBER, label: '順号', fixed: true, isNumeric: true },
@@ -44,12 +110,12 @@ const dailyMetrics = [
 const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
   const [selectedGraphs, setSelectedGraphs] = useState(['temperature', 'baume', 'alcohol', 'bmd', 'ab', 'alcohol_coeff']);
   const [graphPeriods, setGraphPeriods] = useState({
-    temperature: { startDay: 5, endDay: 24 },
-    baume: { startDay: 5, endDay: 24 },
-    alcohol: { startDay: 9, endDay: 24 },
-    bmd: { startDay: 5, endDay: 24 },
-    ab: { startDay: 9, endDay: 24 },
-    alcohol_coeff: { startDay: 5, endDay: 24 },
+    temperature: { startDay: 5, endDay: 28 },
+    baume: { startDay: 5, endDay: 28 },
+    alcohol: { startDay: 9, endDay: 28 },
+    bmd: { startDay: 5, endDay: 28 },
+    ab: { startDay: 9, endDay: 28 },
+    alcohol_coeff: { startDay: 8, endDay: 28 }, // 元の設定維持
   });
   const [showOisui, setShowOisui] = useState({
     temperature: true,
@@ -63,7 +129,8 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
 
   useEffect(() => {
     console.log('Tanks and selectedTankIds updated:', { tanks, selectedTankIds });
-    const newSelectedTanks = Array.isArray(tanks) ? tanks.filter(tank => Array.isArray(selectedTankIds) && selectedTankIds.includes(tank.tankId)) : [];
+    const newSelectedTanks = Array.isArray(tanks) ?
+      tanks.filter(tank => Array.isArray(selectedTankIds) && selectedTankIds.includes(tank.tankId)) : [];
     setSelectedTanksState(newSelectedTanks || []);
 
     // 初期状態: すべてのタンクを各グラフで選択
@@ -91,7 +158,7 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
     { id: 'alcohol', title: 'アルコール経過グラフ', yAxis: COLUMN_NAMES.DAILY.ALCOHOL_AFTER_WATER, yRange: { min: 5, max: 20 }, type: 'line' },
     { id: 'bmd', title: 'BMD経過グラフ', yAxis: COLUMN_NAMES.DAILY.BMD_COMPLEMENT, yRange: { min: -30, max: 50 }, type: 'line' },
     { id: 'ab', title: 'アルコール vs ボーメ', xAxis: COLUMN_NAMES.DAILY.ALCOHOL, yAxis: COLUMN_NAMES.DAILY.BAUME_BMD_DAY, yRange: { min: -2, max: 6 }, type: 'scatter' },
-    { id: 'alcohol_coeff', title: 'アルコール係数推移グラフ', yAxis: COLUMN_NAMES.DAILY.ALCOHOL_COEFF_WATER, yRange: { min: 0, max: 3.0 }, type: 'line' },
+    { id: 'alcohol_coeff', title: '真のアルコール係数推移グラフ', yAxis: 'true_alcohol_coeff', yRange: { min: 0, max: 2.5 }, type: 'line' }, // タイトルのみ変更
   ];
 
   const getAvailableDays = (tank, graphId) => {
@@ -121,15 +188,74 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
   const getDatasets = (graph) => {
     console.log('Generating datasets for graph:', graph.id, 'with selectedTanksByGraph:', selectedTanksByGraph[graph.id]);
     const datasets = [];
+    
     selectedTanksState.forEach((tank, index) => {
       if (!tank || !tank.dailyData) {
         console.warn('Skipping invalid tank data:', tank);
         return;
       }
+      
       const availableDays = getAvailableDays(tank, graph.id);
       const isSelected = selectedTanksByGraph[graph.id]?.[tank.tankId] || false;
+      
+      // alcohol_coeffグラフのみ真のアルコール係数を表示
+      if (graph.id === 'alcohol_coeff') {
+        const trueCoeffResults = calculateTrueCoefficients(tank);
+        if (trueCoeffResults.length === 0 || !isSelected) return;
+        
+        // ①追い水反映のデータ
+        const withWaterData = availableDays.map(day => {
+          const result = trueCoeffResults.find(r => r.day === day);
+          return result && result.withWater.coefficient !== null ? result.withWater.coefficient : null;
+        });
+        
+        // ②追い水無視のデータ
+        const withoutWaterData = availableDays.map(day => {
+          const result = trueCoeffResults.find(r => r.day === day);
+          return result && result.withoutWater.coefficient !== null ? result.withoutWater.coefficient : null;
+        });
+        
+        const baseColor = colorPalette[index % colorPalette.length];
+        const tankNumber = tank.metadata[COLUMN_NAMES.META.TANK_NUMBER] || index + 1;
+        const yeast = tank.metadata[COLUMN_NAMES.META.YEAST] || '-';
+        
+        // 追い水反映データセット
+        if (withWaterData.some(v => v !== null)) {
+          datasets.push({
+            label: `タンク${tankNumber}(${yeast}) ①追い水反映`,
+            data: withWaterData,
+            borderColor: baseColor,
+            backgroundColor: baseColor.replace('1)', '0.2)'),
+            borderWidth: 3,
+            fill: false,
+            tension: 0.3,
+            pointRadius: 4,
+            spanGaps: true,
+            borderDash: []
+          });
+        }
+        
+        // 追い水無視データセット
+        if (withoutWaterData.some(v => v !== null)) {
+          datasets.push({
+            label: `タンク${tankNumber}(${yeast}) ②追い水無視`,
+            data: withoutWaterData,
+            borderColor: baseColor,
+            backgroundColor: baseColor.replace('1)', '0.1)'),
+            borderWidth: 2,
+            fill: false,
+            tension: 0.3,
+            pointRadius: 3,
+            spanGaps: true,
+            borderDash: [5, 5]
+          });
+        }
+        
+        return;
+      }
+      
+      // 既存のグラフロジック（AB散布図）
       if (graph.id === 'ab') {
-        // AB散布図は追い水を含まず、散布データと直線のみ
         const scatterData = availableDays.map(day => {
           const dayData = tank.dailyData[day];
           return dayData && dayData[graph.xAxis] !== null && dayData[graph.yAxis] !== null
@@ -163,10 +289,11 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
           });
         }
       } else {
-        // 線グラフはデータと追い水
+        // 既存の線グラフロジック（変更なし）
         const rawData = availableDays.map(day => {
           const dayData = tank.dailyData[day];
-          return dayData && dayData[graph.yAxis] !== null ? parseFloat(dayData[graph.yAxis]) : null;
+          return dayData && dayData[graph.yAxis] !== null ?
+            parseFloat(dayData[graph.yAxis]) : null;
         }).filter(v => v !== null);
         if (rawData.length > 0 && isSelected) {
           datasets.push({
@@ -182,6 +309,8 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
             hidden: !isSelected,
           });
         }
+        
+        // 既存の追い水表示ロジック（変更なし）
         const waterData = availableDays.map(day => {
           const dayData = tank.dailyData[day];
           const y = dayData ? parseFloat(dayData[COLUMN_NAMES.DAILY.WATER]) || 0 : 0;
@@ -345,7 +474,14 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
                     scales: {
                       x: { title: { display: true, text: '日数' }, min: graphPeriods[graph.id].startDay, max: graphPeriods[graph.id].endDay },
                       y: {
-                        title: { display: true, text: graph.yAxis === COLUMN_NAMES.DAILY.TEMP_1 ? '品温 (°C)' : graph.yAxis === COLUMN_NAMES.DAILY.BAUME_BMD_DAY ? 'ボーメ' : graph.yAxis === COLUMN_NAMES.DAILY.ALCOHOL ? 'アルコール (%)' : graph.yAxis === COLUMN_NAMES.DAILY.BMD_COMPLEMENT ? 'BMD' : 'アルコール係数' },
+                        title: { 
+                          display: true, 
+                          text: graph.id === 'alcohol_coeff' ? '真のアルコール係数' : 
+                                graph.yAxis === COLUMN_NAMES.DAILY.TEMP_1 ? '品温 (°C)' : 
+                                graph.yAxis === COLUMN_NAMES.DAILY.BAUME_BMD_DAY ? 'ボーメ' : 
+                                graph.yAxis === COLUMN_NAMES.DAILY.ALCOHOL ? 'アルコール (%)' : 
+                                graph.yAxis === COLUMN_NAMES.DAILY.BMD_COMPLEMENT ? 'BMD' : 'アルコール係数' 
+                        },
                         min: graph.yRange.min,
                         max: graph.yRange.max,
                       },
