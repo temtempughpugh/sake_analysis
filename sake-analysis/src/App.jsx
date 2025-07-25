@@ -82,6 +82,19 @@ const App = () => {
   const [showMetadata, setShowMetadata] = useState(false); // デフォルト非表示に変更
   const [showMetadataComparison, setShowMetadataComparison] = useState(false);
 
+  const [showColumnSelector, setShowColumnSelector] = useState(false);
+const [selectedColumns, setSelectedColumns] = useState(() => {
+  const saved = localStorage.getItem('selectedColumns');
+  if (saved) {
+    return new Set(JSON.parse(saved));
+  }
+  return new Set(['順号', '仕込み規模', '酵母', '酒質設計', '特定名称', '仕込み総量', 
+    '5日までの積算品温', '最高ボーメ', 'AB開始ボーメ', 'AB開始アルコール', 
+    '最終ボーメ', '最終アルコール度数', '最高BMD', '最高BMD日数', 
+    'true_alcohol_coeff_with_water', 'true_alcohol_coeff_without_water', 
+    '追い水総量', '追い水歩合', '後半追い水量', '後半追い水割合']);
+});
+
   useEffect(() => {
     try {
       localStorage.setItem('tanks', JSON.stringify(tanks));
@@ -107,6 +120,7 @@ const App = () => {
         console.log('Parsed data:', parsedData);
         setTanks(parsedData);
         setSelectedTankIds([]);
+        setShowColumnSelector(true);
         setShowGraphs(false);
         setShowModeling(false);
         setShowPrediction(false);
@@ -441,7 +455,7 @@ const App = () => {
   };
 
   // 改善されたDataTable（選択済みを上に表示）
-  const ImprovedDataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
+  const ImprovedDataTable = ({ tanks, onSelectionChange, selectedTankIds, selectedColumns }) => {
     // 選択済みタンクを上に、未選択を下に分けてソート
     const sortedTanks = React.useMemo(() => {
       if (!tanks || !Array.isArray(tanks)) return [];
@@ -474,7 +488,8 @@ const App = () => {
         <DataTable 
           tanks={sortedTanks} 
           onSelectionChange={onSelectionChange} 
-          selectedTankIds={selectedTankIds} 
+          selectedTankIds={selectedTankIds}
+          selectedColumns={selectedColumns}
         />
       );
     } catch (error) {
@@ -516,6 +531,88 @@ const App = () => {
                   <span>選択中: {selectedTankIds.length}</span>
                 </div>
               </div>
+
+              {/* 項目選択UI */}
+{showColumnSelector && (
+  <div className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
+    <div className="flex justify-between items-center mb-4">
+      <h3 className="text-lg font-semibold">表示するメタデータ項目を選択</h3>
+      <button
+        onClick={() => setShowColumnSelector(false)}
+        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+      >
+        選択完了 ({selectedColumns.size}項目)
+      </button>
+    </div>
+    
+    <div className="mb-4 flex flex-wrap gap-2">
+      <button onClick={() => {
+        const basic = ['順号', '仕込み規模', '酵母', '酒質設計', '特定名称', '仕込み総量'];
+        setSelectedColumns(new Set([...selectedColumns, ...basic]));
+        localStorage.setItem('selectedColumns', JSON.stringify([...new Set([...selectedColumns, ...basic])]));
+      }} className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-sm">基本情報</button>
+      
+      <button onClick={() => {
+        const all = ['順号', '仕込み規模', '酵母', '酒質設計', '特定名称', '仕込み総量', 
+          '5日までの積算品温', '最高ボーメ', 'AB開始ボーメ', 'AB開始アルコール', 
+          '最終ボーメ', '最終アルコール度数', '最高BMD', '最高BMD日数', 
+          'true_alcohol_coeff_with_water', 'true_alcohol_coeff_without_water', 
+          '追い水総量', '追い水歩合', '後半追い水量', '後半追い水割合'];
+        setSelectedColumns(new Set(all));
+        localStorage.setItem('selectedColumns', JSON.stringify(all));
+      }} className="px-3 py-1 bg-gray-100 text-gray-700 rounded text-sm">全て選択</button>
+      
+      <button onClick={() => {
+        setSelectedColumns(new Set());
+        localStorage.setItem('selectedColumns', JSON.stringify([]));
+      }} className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm">全て解除</button>
+    </div>
+    
+    <div className="grid grid-cols-4 gap-2">
+      {[
+        { key: '順号', label: '順号' },
+        { key: '仕込み規模', label: '仕込み規模' },
+        { key: '酵母', label: '酵母' },
+        { key: '酒質設計', label: '酒質設計' },
+        { key: '特定名称', label: '特定名称' },
+        { key: '仕込み総量', label: '仕込み総量' },
+        { key: '5日までの積算品温', label: '積算品温(5日)' },
+        { key: '最高ボーメ', label: '最高ボーメ' },
+        { key: 'AB開始ボーメ', label: 'AB開始ボーメ' },
+        { key: 'AB開始アルコール', label: 'AB開始アルコール' },
+        { key: '最終ボーメ', label: '最終ボーメ' },
+        { key: '最終アルコール度数', label: '最終アルコール' },
+        { key: '最高BMD', label: '最高BMD' },
+        { key: '最高BMD日数', label: '最高BMD日数' },
+        { key: 'true_alcohol_coeff_with_water', label: '真のアルコール係数①' },
+        { key: 'true_alcohol_coeff_without_water', label: '真のアルコール係数②' },
+        { key: '追い水総量', label: '追い水総量' },
+        { key: '追い水歩合', label: '追い水歩合' },
+        { key: '後半追い水量', label: '後半追い水量' },
+        { key: '後半追い水割合', label: '後半追い水割合' }
+      ].map(col => (
+        <label key={col.key} className="flex items-center space-x-2 p-2 hover:bg-gray-50 rounded cursor-pointer">
+          <input
+            type="checkbox"
+            checked={selectedColumns.has(col.key)}
+            onChange={() => {
+              const newSelected = new Set(selectedColumns);
+              if (newSelected.has(col.key)) {
+                newSelected.delete(col.key);
+              } else {
+                newSelected.add(col.key);
+              }
+              setSelectedColumns(newSelected);
+              localStorage.setItem('selectedColumns', JSON.stringify([...newSelected]));
+            }}
+            className="rounded border-gray-300"
+          />
+          <span className="text-sm">{col.label}</span>
+        </label>
+      ))}
+    </div>
+  </div>
+)}
 
               {/* 3. 分析ボタン */}
               <div className="bg-white rounded-lg shadow border border-gray-200 p-4 mb-6">
@@ -570,14 +667,15 @@ const App = () => {
                 </button>
                 
                 {showMetadata && (
-                  <div className="border-t border-gray-200">
-                    <ImprovedDataTable 
-                      tanks={tanks} 
-                      onSelectionChange={handleSelectionChange} 
-                      selectedTankIds={selectedTankIds} 
-                    />
-                  </div>
-                )}
+                <ErrorBoundary>
+                  <ImprovedDataTable 
+                    tanks={tanks} 
+                    onSelectionChange={handleSelectionChange} 
+                    selectedTankIds={selectedTankIds}
+                    selectedColumns={selectedColumns}
+                  />
+                </ErrorBoundary>
+              )}
               </div>
 
               {/* 5. グラフ分析結果 */}

@@ -101,6 +101,27 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
     { key: '後半追い水割合', label: '後半追い水割合', fixed: false, isNumeric: true },
   ];
 
+  const [visibleColumns, setVisibleColumns] = useState(() => {
+    const saved = localStorage.getItem('visibleColumns');
+    if (saved) {
+      return new Set(JSON.parse(saved));
+    }
+    return new Set(columns.map(col => col.key));
+  });
+
+  const displayColumns = columns.filter(col => visibleColumns.has(col.key));
+
+  const toggleColumn = (columnKey) => {
+    const newVisible = new Set(visibleColumns);
+    if (newVisible.has(columnKey)) {
+      newVisible.delete(columnKey);
+    } else {
+      newVisible.add(columnKey);
+    }
+    setVisibleColumns(newVisible);
+    localStorage.setItem('visibleColumns', JSON.stringify([...newVisible]));
+  };
+
   const dailyMetrics = [
     '品温1回目',
     'ボーメ（追い水後）',
@@ -393,6 +414,24 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
           <span>表示中: {processedTanks.length}</span>
           <span>選択中: {selectedTankIds.length}</span>
         </div>
+        <div className="mt-3 border-t pt-3">
+          <div className="text-sm font-medium text-gray-700 mb-2">表示項目選択:</div>
+          <div className="flex flex-wrap gap-x-4 gap-y-2">
+            {columns.map(col => (
+              <label key={col.key} className="flex items-center space-x-1 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={visibleColumns.has(col.key)}
+                  onChange={() => toggleColumn(col.key)}
+                  className="rounded border-gray-300"
+                />
+                <span className={visibleColumns.has(col.key) ? 'text-gray-900' : 'text-gray-400'}>
+                  {col.label}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
       </div>
       <div className="relative overflow-auto" style={{ maxHeight: '500px' }} ref={tableRef}>
         <table className="w-full text-sm border-collapse">
@@ -409,7 +448,7 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
                   className="rounded border-gray-400"
                 />
               </th>
-              {columns.map(col => (
+              {displayColumns.map(col => (
                 <th
                   key={col.key}
                   className={`border border-gray-200 p-2 sticky top-0 ${col.fixed ? 'bg-blue-50 font-bold z-5' : 'bg-gray-100 z-10'} ${filters[col.key]?.size > 0 || rangeFilters[col.key] ? 'bg-yellow-100' : ''}`}
