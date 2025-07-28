@@ -1,6 +1,21 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Database, ChevronDown, ArrowUp, ArrowDown } from 'lucide-react';
 
+// 醪日数を計算する関数
+const calculateMoromiDays = (tank) => {
+  if (!tank.dailyData || typeof tank.dailyData !== 'object') {
+    return null;
+  }
+  
+  const dayNumbers = Object.values(tank.dailyData)
+    .map(dayData => {
+      const dayValue = dayData['日数'];
+      return dayValue !== null && dayValue !== undefined && dayValue !== '' ? parseInt(dayValue) : null;
+    })
+    .filter(day => day !== null && !isNaN(day));
+  
+  return dayNumbers.length > 0 ? Math.max(...dayNumbers) : null;
+};
 
 const calculateTrueCoefficientsFromMeta = (tank) => {
   const metadata = tank.metadata || {};
@@ -79,6 +94,7 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
 
   const columns = [
     { key: '順号', label: '順号', fixed: true, isNumeric: true },
+    { key: '醪日数', label: '醪日数', fixed: true, isNumeric: true }, // 醪日数を順号の次に追加
     { key: '仕込み規模', label: '仕込み規模', fixed: true, isNumeric: true },
     { key: '酵母', label: '酵母', fixed: true, isNumeric: false },
     { key: '酒質設計', label: '酒質設計', fixed: true, isNumeric: false },
@@ -156,93 +172,72 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
   }, []);
 
   const handleSelectTank = (tankId) => {
-    const newSelection = new Set(selectedTankIds);
-    if (newSelection.has(tankId)) {
-      newSelection.delete(tankId);
-    } else {
-      newSelection.add(tankId);
-    }
-    onSelectionChange(Array.from(newSelection));
+    const newSelected = selectedTankIds.includes(tankId)
+      ? selectedTankIds.filter(id => id !== tankId)
+      : [...selectedTankIds, tankId];
+    onSelectionChange(newSelected);
   };
 
-  const handleSelectAll = (event) => {
-    const filteredTanks = getFilteredTanks();
-    if (event.target.checked) {
-      const allTankIds = filteredTanks.map(tank => tank.tankId);
-      onSelectionChange(allTankIds);
-    } else {
+  const handleSelectAll = () => {
+    if (selectedTankIds.length === processedTanks.length) {
       onSelectionChange([]);
+    } else {
+      onSelectionChange(processedTanks.map(tank => tank.tankId));
     }
   };
 
-  const getUniqueValues = (key, isNumeric) => {
-    if (!tanks) return [];
-    const values = new Set(tanks.map(tank => tank.metadata[key]).filter(v => v !== null && v !== undefined));
-    return Array.from(values).sort((a, b) => {
-      if (isNumeric) return a - b;
-      return String(a).localeCompare(String(b));
-    });
-  };
-
-  const handleFilterChange = (column, value, checked) => {
-    setFilters(prev => {
-      const newFilters = { ...prev };
-      if (!newFilters[column]) newFilters[column] = new Set();
-      if (checked) {
-        newFilters[column].add(value);
-      } else {
-        newFilters[column].delete(value);
-        if (newFilters[column].size === 0) delete newFilters[column];
-      }
-      return newFilters;
-    });
-  };
-
-  const handleRangeFilterChange = (column, type, value) => {
-    setRangeFilters(prev => {
-      const newRangeFilters = { ...prev };
-      if (!newRangeFilters[column]) newRangeFilters[column] = { min: '', max: '' };
-      newRangeFilters[column][type] = value === '' ? '' : parseFloat(value);
-      if (newRangeFilters[column].min === '' && newRangeFilters[column].max === '') {
-        delete newRangeFilters[column];
-      }
-      return newRangeFilters;
-    });
-  };
-
-  const handleSelectAllFilter = (column, isNumeric) => {
-    const values = getUniqueValues(column, isNumeric);
-    setFilters(prev => {
-      const newFilters = { ...prev };
-      if (!newFilters[column] || newFilters[column].size < values.length) {
-        newFilters[column] = new Set(values);
-      } else {
-        delete newFilters[column];
-      }
-      return newFilters;
-    });
-  };
-
-  const getFilteredTanks = () => {
-    if (!tanks) return [];
+  const applyFilters = (tanks) => {
     return tanks.filter(tank => {
-      return Object.entries(filters).every(([column, values]) => {
-        if (values.size === 0) return true;
-        return values.has(tank.metadata[column]);
-      }) && Object.entries(rangeFilters).every(([column, { min, max }]) => {
-        const value = tank.metadata[column];
-        if (value === null || value === undefined) return false;
-        if (min !== '' && value < min) return false;
-        if (max !== '' && value > max) return false;
-        return true;
-      });
+      for (const [key, filterSet] of Object.entries(filters)) {
+        if (filterSet.size === 0) continue;
+        
+        let value;
+        if (key === 'true_alcohol_coeff_with_water') {
+          const result = calculateTrueCoefficientsFromMeta(tank);
+          value = result.withWater !== null ? result.withWater.toFixed(3) : '-';
+        } else if (key === 'true_alcohol_coeff_without_water') {
+          const result = calculateTrueCoefficientsFromMeta(tank);
+          value = result.withoutWater !== null ? result.withoutWater.toFixed(3) : '-';
+        } else if (key === '醪日数') {
+          const moromiDays = calculateMoromiDays(tank);
+          value = moromiDays !== null ? moromiDays.toString() : '-';
+        } else {
+          value = tank.metadata[key];
+        }
+        
+        if (value == null) value = '-';
+        if (!filterSet.has(String(value))) return false;
+      }
+      
+      for (const [key, range] of Object.entries(rangeFilters)) {
+        if (!range.min && !range.max) continue;
+        
+        let numValue;
+        if (key === 'true_alcohol_coeff_with_water') {
+          const result = calculateTrueCoefficientsFromMeta(tank);
+          numValue = result.withWater;
+        } else if (key === 'true_alcohol_coeff_without_water') {
+          const result = calculateTrueCoefficientsFromMeta(tank);
+          numValue = result.withoutWater;
+        } else if (key === '醪日数') {
+          numValue = calculateMoromiDays(tank);
+        } else {
+          numValue = Number(tank.metadata[key]);
+        }
+        
+        if (isNaN(numValue)) continue;
+        if (range.min && numValue < Number(range.min)) return false;
+        if (range.max && numValue > Number(range.max)) return false;
+      }
+      
+      return true;
     });
   };
 
-  const multiSort = (data) => {
-    if (sortConfigs.length === 0) return data;
+  const applySorts = (tanks) => {
+    if (sortConfigs.length === 0) return tanks;
     
-    return [...data].sort((a, b) => {
+    return [...tanks].sort((a, b) => {
       for (const { key, direction } of sortConfigs) {
         let aValue, bValue;
         
@@ -266,6 +261,9 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
             aValue = null;
             bValue = null;
           }
+        } else if (key === '醪日数') {
+          aValue = calculateMoromiDays(a);
+          bValue = calculateMoromiDays(b);
         } else {
           aValue = a.metadata[key];
           bValue = b.metadata[key];
@@ -276,7 +274,16 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
         if (aValue == null) return 1;
         if (bValue == null) return -1;
         
-        const comparison = Number(aValue) - Number(bValue);
+        // 数値型と文字列型を区別してソート
+        const column = columns.find(col => col.key === key);
+        let comparison;
+        
+        if (column && column.isNumeric) {
+          comparison = Number(aValue) - Number(bValue);
+        } else {
+          comparison = String(aValue).localeCompare(String(bValue));
+        }
+        
         if (comparison !== 0) return direction === 'asc' ? comparison : -comparison;
       }
       return 0;
@@ -347,41 +354,102 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
     setFilterSearch('');
   };
 
-
-  const processedTanks = multiSort(getFilteredTanks());
-
-  // 比較表用の統計（メタデータ＋日次データ）
-  const selectedTanksData = tanks.filter(tank => selectedTankIds.includes(tank.tankId));
-  const metaStats = columns.reduce((acc, col) => {
-    if (col.isNumeric) {
-      let values;
-      
-      // 真のアルコール係数の場合は特別な処理
-      if (col.key === 'true_alcohol_coeff_with_water') {
-        values = selectedTanksData
-          .map(tank => {
-            const result = calculateTrueCoefficientsFromMeta(tank);
-            return result.withWater;
-          })
-          .filter(v => v !== null && v !== undefined && !isNaN(v));
-      } else if (col.key === 'true_alcohol_coeff_without_water') {
-        values = selectedTanksData
-          .map(tank => {
-            const result = calculateTrueCoefficientsFromMeta(tank);
-            return result.withoutWater;
-          })
-          .filter(v => v !== null && v !== undefined && !isNaN(v));
+  const getColumnValues = (key) => {
+    const values = new Set();
+    tanks.forEach(tank => {
+      let value;
+      if (key === 'true_alcohol_coeff_with_water') {
+        const result = calculateTrueCoefficientsFromMeta(tank);
+        value = result.withWater !== null ? result.withWater.toFixed(3) : '-';
+      } else if (key === 'true_alcohol_coeff_without_water') {
+        const result = calculateTrueCoefficientsFromMeta(tank);
+        value = result.withoutWater !== null ? result.withoutWater.toFixed(3) : '-';
+      } else if (key === '醪日数') {
+        const moromiDays = calculateMoromiDays(tank);
+        value = moromiDays !== null ? moromiDays.toString() : '-';
       } else {
-        // 通常のメタデータ項目
-        values = selectedTanksData
-          .map(tank => tank.metadata[col.key])
-          .filter(v => v !== null && v !== undefined);
+        value = tank.metadata[key];
       }
       
+      if (value == null) value = '-';
+      values.add(String(value));
+    });
+    return Array.from(values).sort((a, b) => {
+      const numA = Number(a);
+      const numB = Number(b);
+      if (!isNaN(numA) && !isNaN(numB)) {
+        return numA - numB;
+      }
+      return a.localeCompare(b);
+    });
+  };
+
+  const handleFilterChange = (key, value, checked) => {
+    setFilters(prev => {
+      const newFilters = { ...prev };
+      if (!newFilters[key]) {
+        newFilters[key] = new Set();
+      } else {
+        newFilters[key] = new Set(newFilters[key]);
+      }
+      
+      if (checked) {
+        newFilters[key].add(value);
+      } else {
+        newFilters[key].delete(value);
+      }
+      
+      return newFilters;
+    });
+  };
+
+  const handleRangeFilterChange = (key, type, value) => {
+    setRangeFilters(prev => ({
+      ...prev,
+      [key]: {
+        ...prev[key],
+        [type]: value
+      }
+    }));
+  };
+
+  const clearFilter = (key) => {
+    setFilters(prev => {
+      const newFilters = { ...prev };
+      delete newFilters[key];
+      return newFilters;
+    });
+    setRangeFilters(prev => {
+      const newFilters = { ...prev };
+      delete newFilters[key];
+      return newFilters;
+    });
+  };
+
+  const processedTanks = applySorts(applyFilters(tanks || []));
+
+  const selectedTanksData = processedTanks.filter(tank => selectedTankIds.includes(tank.tankId));
+
+  const metaStats = columns.filter(col => col.isNumeric).reduce((acc, col) => {
+    const values = selectedTanksData.map(tank => {
+      if (col.key === 'true_alcohol_coeff_with_water') {
+        const result = calculateTrueCoefficientsFromMeta(tank);
+        return result.withWater;
+      } else if (col.key === 'true_alcohol_coeff_without_water') {
+        const result = calculateTrueCoefficientsFromMeta(tank);
+        return result.withoutWater;
+      } else if (col.key === '醪日数') {
+        return calculateMoromiDays(tank);
+      } else {
+        return Number(tank.metadata[col.key]);
+      }
+    }).filter(v => !isNaN(v) && v !== null);
+    
+    if (values.length > 0) {
       acc[col.key] = {
-        avg: values.length ? (values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2) : '-',
-        max: values.length ? Math.max(...values).toFixed(2) : '-',
-        min: values.length ? Math.min(...values).toFixed(2) : '-',
+        avg: (values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2),
+        max: Math.max(...values).toFixed(2),
+        min: Math.min(...values).toFixed(2),
       };
     }
     return acc;
@@ -452,119 +520,28 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
                 <th
                   key={col.key}
                   className={`border border-gray-200 p-2 sticky top-0 ${col.fixed ? 'bg-blue-50 font-bold z-5' : 'bg-gray-100 z-10'} ${filters[col.key]?.size > 0 || rangeFilters[col.key] ? 'bg-yellow-100' : ''}`}
-                  style={{ minWidth: '100px', left: col.fixed ? `${50 + columns.filter(c => c.fixed && columns.indexOf(c) < columns.indexOf(col)).length * 100}px` : 'auto' }}
+                  style={{ minWidth: '100px', left: col.fixed ? `${50 + displayColumns.filter(c => c.fixed && displayColumns.indexOf(c) < displayColumns.indexOf(col)).length * 100}px` : 'auto' }}
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center">
-                      {col.label}
+                  <div className="flex items-center justify-between space-x-1">
+                    <span className="truncate">{col.label}</span>
+                    <div className="flex items-center space-x-1">
                       {getSortConfig(col.key) && (
-                        <span className="ml-1 flex items-center">
-                          {getSortConfig(col.key).direction === 'asc' ? (
-                            <ArrowUp className="w-3 h-3 text-blue-600" />
-                          ) : (
+                        <div className="flex items-center">
+                          {getSortConfig(col.key).direction === 'asc' ? 
+                            <ArrowUp className="w-3 h-3 text-blue-600" /> : 
                             <ArrowDown className="w-3 h-3 text-blue-600" />
-                          )}
-                          {getSortPriority(col.key) > 1 && (
-                            <span className="text-xs text-blue-600 ml-0.5">{getSortPriority(col.key)}</span>
-                          )}
-                        </span>
-                      )}
-                    </span>
-                    <button
-                      className={`p-1 rounded hover:bg-gray-200 ${filters[col.key]?.size > 0 || rangeFilters[col.key] ? 'bg-yellow-200' : ''}`}
-                      onClick={(e) => handleFilterButtonClick(e, col.key)}
-                    >
-                      <ChevronDown className="w-4 h-4" />
-                    </button>
-                  </div>
-                  {activeFilter === col.key && (
-                    <div
-                      ref={filterRef}
-                      className="fixed bg-white border border-gray-300 rounded shadow-lg z-[1000]"
-                      style={{ left: `${filterPosition.left}px`, top: `${filterPosition.top}px`, minWidth: '200px' }}
-                    >
-                      <div className="p-2 bg-gray-50 border-b border-gray-200">
-                        <div className="text-xs font-semibold mb-2">並べ替え</div>
-                        <button
-                          onClick={() => handleSortFromMenu(col.key, 'asc')}
-                          className={`w-full text-left px-2 py-1 rounded hover:bg-blue-100 ${getSortConfig(col.key)?.direction === 'asc' ? 'bg-blue-100' : ''}`}
-                        >
-                          昇順
-                        </button>
-                        <button
-                          onClick={() => handleSortFromMenu(col.key, 'desc')}
-                          className={`w-full text-left px-2 py-1 rounded hover:bg-blue-100 ${getSortConfig(col.key)?.direction === 'desc' ? 'bg-blue-100' : ''}`}
-                        >
-                          降順
-                        </button>
-                        {getSortConfig(col.key) && (
-                          <button
-                            onClick={() => clearSort(col.key)}
-                            className="w-full text-left px-2 py-1 rounded hover:bg-red-100 text-red-600"
-                          >
-                            ソート解除
-                          </button>
-                        )}
-                      </div>
-                      <div className="p-2">
-                        <div className="text-xs font-semibold mb-2">フィルター</div>
-                        {col.isNumeric && (
-                          <div className="space-y-2 border-b border-gray-200 pb-2">
-                            <div>
-                              <label className="text-xs">以上</label>
-                              <input
-                                type="number"
-                                placeholder="最小値"
-                                value={rangeFilters[col.key]?.min ?? ''}
-                                onChange={(e) => handleRangeFilterChange(col.key, 'min', e.target.value)}
-                                className="w-full p-1 border border-gray-300 rounded text-sm"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-xs">以下</label>
-                              <input
-                                type="number"
-                                placeholder="最大値"
-                                value={rangeFilters[col.key]?.max ?? ''}
-                                onChange={(e) => handleRangeFilterChange(col.key, 'max', e.target.value)}
-                                className="w-full p-1 border border-gray-300 rounded text-sm"
-                              />
-                            </div>
-                          </div>
-                        )}
-                        <div className="mt-2">
-                          <input
-                            type="text"
-                            placeholder="検索..."
-                            value={filterSearch}
-                            onChange={(e) => setFilterSearch(e.target.value)}
-                            className="w-full p-1 border border-gray-300 rounded text-sm"
-                          />
-                          <div className="mt-2 max-h-40 overflow-y-auto">
-                            {getUniqueValues(col.key, col.isNumeric)
-                              .filter(v => String(v).toLowerCase().includes(filterSearch.toLowerCase()))
-                              .map(value => (
-                                <label key={value} className="flex items-center space-x-2 p-1 hover:bg-gray-100">
-                                  <input
-                                    type="checkbox"
-                                    checked={filters[col.key]?.has(value) || false}
-                                    onChange={(e) => handleFilterChange(col.key, value, e.target.checked)}
-                                    className="rounded border-gray-400"
-                                  />
-                                  <span className="text-xs">{value}</span>
-                                </label>
-                              ))}
-                          </div>
-                          <button
-                            onClick={() => handleSelectAllFilter(col.key, col.isNumeric)}
-                            className="w-full text-left px-2 py-1 rounded hover:bg-gray-100 text-sm"
-                          >
-                            {filters[col.key]?.size === getUniqueValues(col.key, col.isNumeric).length ? 'すべて解除' : 'すべて選択'}
-                          </button>
+                          }
+                          <span className="text-xs text-blue-600 ml-1">{getSortPriority(col.key)}</span>
                         </div>
-                      </div>
+                      )}
+                      <button
+                        onClick={(e) => handleFilterButtonClick(e, col.key)}
+                        className="p-1 hover:bg-gray-300 rounded"
+                      >
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
                     </div>
-                  )}
+                  </div>
                 </th>
               ))}
             </tr>
@@ -586,15 +563,20 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
                     className="rounded border-gray-400"
                   />
                 </td>
-                {columns.map(col => (
+                {displayColumns.map(col => (
   <td
     key={col.key}
     className={`border border-gray-200 p-2 ${col.fixed ? 'sticky z-5 bg-inherit' : ''}`}
-    style={{ minWidth: '100px', left: col.fixed ? `${50 + columns.filter(c => c.fixed && columns.indexOf(c) < columns.indexOf(col)).length * 100}px` : 'auto' }}
+    style={{ minWidth: '100px', left: col.fixed ? `${50 + displayColumns.filter(c => c.fixed && displayColumns.indexOf(c) < displayColumns.indexOf(col)).length * 100}px` : 'auto' }}
   >
     {(() => {
+      // 醪日数の場合
+      if (col.key === '醪日数') {
+        const moromiDays = calculateMoromiDays(tank);
+        return moromiDays !== null ? moromiDays : '-';
+      }
       // 真のアルコール係数①の場合
-      if (col.key === 'true_alcohol_coeff_with_water') {
+      else if (col.key === 'true_alcohol_coeff_with_water') {
         const result = calculateTrueCoefficientsFromMeta(tank);
         return result.withWater !== null ? result.withWater.toFixed(3) : '-';
       } 
@@ -631,9 +613,9 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
               {columns.filter(col => col.isNumeric).map(col => (
                 <tr key={col.key} className="border-b">
                   <td className="border border-gray-200 p-2">{col.label}</td>
-                  <td className="border border-gray-200 p-2">{metaStats[col.key].avg}</td>
-                  <td className="border border-gray-200 p-2">{metaStats[col.key].max}</td>
-                  <td className="border border-gray-200 p-2">{metaStats[col.key].min}</td>
+                  <td className="border border-gray-200 p-2">{metaStats[col.key]?.avg || '-'}</td>
+                  <td className="border border-gray-200 p-2">{metaStats[col.key]?.max || '-'}</td>
+                  <td className="border border-gray-200 p-2">{metaStats[col.key]?.min || '-'}</td>
                 </tr>
               ))}
             </tbody>
@@ -659,6 +641,124 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* フィルターポップアップ */}
+      {activeFilter && (
+        <div
+          ref={filterRef}
+          className="fixed bg-white border border-gray-300 rounded-lg shadow-lg p-3 z-50"
+          style={{
+            left: filterPosition.left,
+            top: filterPosition.top,
+            width: '250px',
+            maxHeight: '300px',
+            overflow: 'auto'
+          }}
+        >
+          <div className="mb-2">
+            <div className="flex justify-between items-center mb-2">
+              <span className="font-semibold text-sm">{columns.find(col => col.key === activeFilter)?.label}</span>
+              <button
+                onClick={() => clearFilter(activeFilter)}
+                className="text-red-600 hover:text-red-800 text-xs"
+              >
+                クリア
+              </button>
+            </div>
+            
+            {/* 数値型の場合は範囲フィルター */}
+            {columns.find(col => col.key === activeFilter)?.isNumeric && (
+              <div className="mb-3 p-2 bg-gray-50 rounded">
+                <div className="text-xs text-gray-600 mb-1">範囲指定</div>
+                <div className="flex space-x-2">
+                  <input
+                    type="number"
+                    placeholder="最小"
+                    value={rangeFilters[activeFilter]?.min || ''}
+                    onChange={(e) => handleRangeFilterChange(activeFilter, 'min', e.target.value)}
+                    className="w-20 px-2 py-1 border border-gray-300 rounded text-xs"
+                  />
+                  <span className="self-center text-xs">〜</span>
+                  <input
+                    type="number"
+                    placeholder="最大"
+                    value={rangeFilters[activeFilter]?.max || ''}
+                    onChange={(e) => handleRangeFilterChange(activeFilter, 'max', e.target.value)}
+                    className="w-20 px-2 py-1 border border-gray-300 rounded text-xs"
+                  />
+                </div>
+              </div>
+            )}
+            
+            <input
+              type="text"
+              placeholder="検索..."
+              value={filterSearch}
+              onChange={(e) => setFilterSearch(e.target.value)}
+              className="w-full px-2 py-1 border border-gray-300 rounded text-sm mb-2"
+            />
+          </div>
+          
+          <div className="space-y-1 max-h-32 overflow-y-auto">
+            <div className="flex items-center space-x-2 text-xs">
+              <button
+                onClick={() => {
+                  const values = getColumnValues(activeFilter);
+                  values.forEach(value => {
+                    handleFilterChange(activeFilter, value, !(filters[activeFilter]?.has(value) ?? false));
+                  });
+                }}
+                className="text-blue-600 hover:text-blue-800"
+              >
+                {filters[activeFilter]?.size === getColumnValues(activeFilter).length ? 'すべて解除' : 'すべて選択'}
+              </button>
+            </div>
+            {getColumnValues(activeFilter)
+              .filter(value => 
+                filterSearch === '' || 
+                String(value).toLowerCase().includes(filterSearch.toLowerCase())
+              )
+              .map(value => (
+                <label key={value} className="flex items-center space-x-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={filters[activeFilter]?.has(value) ?? false}
+                    onChange={(e) => handleFilterChange(activeFilter, value, e.target.checked)}
+                    className="rounded border-gray-300"
+                  />
+                  <span className="truncate">{value}</span>
+                </label>
+              ))}
+          </div>
+          
+          {/* ソートメニュー */}
+          <div className="mt-3 pt-3 border-t border-gray-200">
+            <div className="text-xs text-gray-600 mb-2">ソート</div>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => handleSortFromMenu(activeFilter, 'asc')}
+                className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+              >
+                昇順
+              </button>
+              <button
+                onClick={() => handleSortFromMenu(activeFilter, 'desc')}
+                className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+              >
+                降順
+              </button>
+              {getSortConfig(activeFilter) && (
+                <button
+                  onClick={() => clearSort(activeFilter)}
+                  className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+                >
+                  解除
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
