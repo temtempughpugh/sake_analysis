@@ -5,6 +5,7 @@ import DataTable from './components/DataTable';
 import TankGraph from './components/TankGraph';
 import ProgressModeling from './components/ProgressModeling';
 import PredictionModeling from './components/PredictionModeling';
+import TemperatureAnalysis from './components/TemperatureAnalysis'; // 新規追加
 
 const ErrorBoundary = ({ children }) => {
   const [hasError, setHasError] = useState(false);
@@ -56,71 +57,83 @@ function App() {
     }
     return [];
   });
-  
+
+  const [isLoading, setIsLoading] = useState(false);
   const [showGraphs, setShowGraphs] = useState(false);
   const [showModeling, setShowModeling] = useState(false);
   const [showPrediction, setShowPrediction] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
-  
-  // 折りたたみ状態
+  const [showTemperatureAnalysis, setShowTemperatureAnalysis] = useState(false); // 新規追加
   const [showMetadata, setShowMetadata] = useState(false);
   const [showMetadataComparison, setShowMetadataComparison] = useState(false);
 
+  // LocalStorageに保存
   useEffect(() => {
-    try {
+    if (tanks.length > 0) {
       localStorage.setItem('tanks', JSON.stringify(tanks));
-    } catch (e) {
-      console.error('Failed to save tanks:', e);
     }
   }, [tanks]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('selectedTankIds', JSON.stringify(selectedTankIds));
-    } catch (e) {
-      console.error('Failed to save selectedTankIds:', e);
-    }
+    localStorage.setItem('selectedTankIds', JSON.stringify(selectedTankIds));
   }, [selectedTankIds]);
 
   const handleFileUpload = (file) => {
     setIsLoading(true);
-    setError(null);
     
-    parseCSV(file, (parsedData) => {
-      try {
-        console.log('Parsed data:', parsedData);
-        setTanks(parsedData);
+    parseCSV(file, (data, error) => {
+      if (error) {
+        console.error('CSV parsing error:', error);
+        alert(`CSVファイルの解析に失敗しました: ${error.message}`);
+      } else if (data) {
+        console.log('Parsed tanks:', data);
+        setTanks(data);
         setSelectedTankIds([]);
-        setIsLoading(false);
-      } catch (err) {
-        console.error('Error setting parsed data:', err);
-        setError('データの処理中にエラーが発生しました');
-        setIsLoading(false);
+        // 分析結果をリセット
+        setShowGraphs(false);
+        setShowModeling(false);
+        setShowPrediction(false);
+        setShowTemperatureAnalysis(false); // 新規追加
       }
+      setIsLoading(false);
     });
   };
 
-  const handleSelectionChange = (newSelection) => {
-    setSelectedTankIds(newSelection);
+  const handleSelectionChange = (newSelectedIds) => {
+    setSelectedTankIds(newSelectedIds);
+    // 選択が変更されたら分析結果をリセット
+    setShowGraphs(false);
+    setShowModeling(false);
+    setShowPrediction(false);
+    setShowTemperatureAnalysis(false); // 新規追加
   };
 
   const handleAnalyze = () => {
     setShowGraphs(true);
     setShowModeling(false);
     setShowPrediction(false);
+    setShowTemperatureAnalysis(false); // 新規追加
   };
 
   const handleModelingAnalyze = () => {
     setShowModeling(true);
     setShowGraphs(false);
     setShowPrediction(false);
+    setShowTemperatureAnalysis(false); // 新規追加
   };
 
   const handlePredictionAnalyze = () => {
     setShowPrediction(true);
     setShowGraphs(false);
     setShowModeling(false);
+    setShowTemperatureAnalysis(false); // 新規追加
+  };
+
+  // 品温分析ボタン処理（新規追加）
+  const handleTemperatureAnalyze = () => {
+    setShowTemperatureAnalysis(true);
+    setShowGraphs(false);
+    setShowModeling(false);
+    setShowPrediction(false);
   };
 
   // 真のアルコール係数計算関数
@@ -162,132 +175,222 @@ function App() {
       }
       
       results.push({
-        day: dayData.day,
-        withWater: { coefficient: coefficientWithWater },
-        withoutWater: { coefficient: coefficientWithoutWater }
+        day,
+        coefficientWithWater,
+        coefficientWithoutWater,
+        baume,
+        alcohol,
+        baumeWithoutWater,
+        alcoholWithoutWater
       });
     });
     
-    return results;
+    return results.sort((a, b) => a.day - b.day);
   };
 
-  // メタデータ比較コンポーネント
   const MetadataComparison = ({ tanks, selectedTankIds }) => {
     try {
-      if (!tanks || !Array.isArray(tanks) || !selectedTankIds || !Array.isArray(selectedTankIds)) {
-        return <p className="text-gray-500">データが正しくありません</p>;
-      }
-
-      const selectedTanks = tanks.filter(tank => 
-        tank && tank.tankId && selectedTankIds.includes(tank.tankId)
-      );
+      const selectedTanks = tanks.filter(tank => selectedTankIds.includes(tank.tankId));
       
       if (selectedTanks.length === 0) {
-        return <p className="text-gray-500">タンクを選択してください</p>;
+        return (
+          <div className="p-4 text-center text-gray-500">
+            比較するタンクを選択してください
+          </div>
+        );
       }
 
-      // 真のアルコール係数の最終日の値を取得
-      const getTrueAlcoholCoeffFinal = (tank) => {
-        console.log('getTrueAlcoholCoeffFinal for tank:', tank.tankId);
-        const results = calculateTrueCoefficients(tank);
-        console.log('calculateTrueCoefficients results:', results);
-        if (results.length === 0) {
-          console.log('No results from calculateTrueCoefficients');
+      const calculateTrueCoefficientsFromMeta = (tank) => {
+        const totalVolume = tank.metadata['仕込み総量'] || 0;
+        const finalAlcohol = tank.metadata['最終アルコール度数'] || 0;
+        const finalBaume = tank.metadata['最終ボーメ'] || 0;
+        const abStartAlcohol = tank.metadata['AB開始アルコール'] || 0;
+        const abStartBaume = tank.metadata['AB開始ボーメ'] || 0;
+        const totalWater = tank.metadata['追い水総量'] || 0;
+
+        if (totalVolume === 0) {
           return { withWater: null, withoutWater: null };
         }
-        const finalResult = results[results.length - 1];
-        console.log('Final result:', finalResult);
+
+        const dilutionFactor = (totalVolume + totalWater) / totalVolume;
+        
+        const trueAlcoholWithWater = finalAlcohol;
+        const trueBaumeWithWater = finalBaume;
+        const trueAlcoholWithoutWater = finalAlcohol * dilutionFactor;
+        const trueBaumeWithoutWater = finalBaume * dilutionFactor;
+
+        const alcoholChangeWithWater = trueAlcoholWithWater - abStartAlcohol;
+        const baumeChangeWithWater = abStartBaume - trueBaumeWithWater;
+        const alcoholChangeWithoutWater = trueAlcoholWithoutWater - (abStartAlcohol * dilutionFactor);
+        const baumeChangeWithoutWater = (abStartBaume * dilutionFactor) - trueBaumeWithoutWater;
+
+        const coefficientWithWater = baumeChangeWithWater > 0 ? alcoholChangeWithWater / baumeChangeWithWater : null;
+        const coefficientWithoutWater = baumeChangeWithoutWater > 0 ? alcoholChangeWithoutWater / baumeChangeWithoutWater : null;
+
         return {
-          withWater: finalResult.withWater.coefficient,
-          withoutWater: finalResult.withoutWater.coefficient
+          withWater: coefficientWithWater,
+          withoutWater: coefficientWithoutWater
         };
       };
 
+      const calculateMoromiDays = (tank) => {
+        if (!tank.dailyData) return null;
+        
+        const days = Object.values(tank.dailyData)
+          .map(d => parseInt(d['日数']))
+          .filter(d => !isNaN(d));
+        
+        return days.length > 0 ? Math.max(...days) : null;
+      };
+
       const columns = [
-        { key: '順号', label: '順号', isNumeric: true },
-        { key: '仕込み規模', label: '仕込み規模', isNumeric: true },
-        { key: '酵母', label: '酵母', isNumeric: false },
-        { key: '酒質設計', label: '酒質設計', isNumeric: false },
-        { key: '最高ボーメ', label: '最高ボーメ', isNumeric: true },
-        { key: '最終ボーメ', label: '最終ボーメ', isNumeric: true },
-        { key: '最終アルコール度数', label: '最終アルコール', isNumeric: true },
-        // 新しく追加：真のアルコール係数
-        { key: 'true_alcohol_coeff_with_water', label: '真のアルコール係数①', isNumeric: true },
-        { key: 'true_alcohol_coeff_without_water', label: '真のアルコール係数②', isNumeric: true },
+        { key: '順号', label: '順号', fixed: true, isNumeric: false },
+        { key: '仕込み規模', label: '仕込み規模', fixed: true, isNumeric: true },
+        { key: '酵母', label: '酵母', fixed: true, isNumeric: false },
+        { key: '酒質設計', label: '酒質設計', fixed: true, isNumeric: false },
+        { key: '特定名称', label: '特定名称', fixed: false, isNumeric: false },
+        { key: '仕込み総量', label: '仕込み総量', fixed: false, isNumeric: true },
+        { key: '5日までの積算品温', label: '5日積算品温', fixed: false, isNumeric: true },
+        { key: '最高ボーメ', label: '最高ボーメ', fixed: false, isNumeric: true },
+        { key: 'AB開始ボーメ', label: 'AB開始ボーメ', fixed: false, isNumeric: true },
+        { key: 'AB開始アルコール', label: 'AB開始アルコール', fixed: false, isNumeric: true },
+        { key: '最終ボーメ', label: '最終ボーメ', fixed: false, isNumeric: true },
+        { key: '最終アルコール度数', label: '最終アルコール', fixed: false, isNumeric: true },
+        { key: '最高BMD', label: '最高BMD', fixed: false, isNumeric: true },
+        { key: '最高BMD日数', label: '最高BMD日数', fixed: false, isNumeric: true },
+        { key: '追い水総量', label: '追い水総量', fixed: false, isNumeric: true },
+        { key: '追い水歩合', label: '追い水歩合', fixed: false, isNumeric: true },
+        { key: '後半追い水量', label: '後半追い水量', fixed: false, isNumeric: true },
+        { key: '後半追い水割合', label: '後半追い水割合', fixed: false, isNumeric: true },
+        { key: '醪日数', label: '醪日数', fixed: false, isNumeric: true },
+        { key: 'true_alcohol_coeff_with_water', label: '真のアルコール係数①', fixed: false, isNumeric: true },
+        { key: 'true_alcohol_coeff_without_water', label: '真のアルコール係数②', fixed: false, isNumeric: true }
       ];
 
-      const getValue = (tank, key) => {
-        if (key === 'true_alcohol_coeff_with_water') {
-          const result = getTrueAlcoholCoeffFinal(tank);
-          return result.withWater;
-        } else if (key === 'true_alcohol_coeff_without_water') {
-          const result = getTrueAlcoholCoeffFinal(tank);
-          return result.withoutWater;
-        } else {
-          return tank.metadata[key];
-        }
-      };
+      const metrics = [
+        { key: '仕込み規模', label: '仕込み規模' },
+        { key: '仕込み総量', label: '仕込み総量' },
+        { key: '最高ボーメ', label: '最高ボーメ' },
+        { key: '最終ボーメ', label: '最終ボーメ' },
+        { key: '最終アルコール度数', label: '最終アルコール度数' },
+        { key: '最高BMD', label: '最高BMD' },
+        { key: '追い水総量', label: '追い水総量' },
+        { key: 'true_alcohol_coeff_with_water', label: '真のアルコール係数①' },
+        { key: 'true_alcohol_coeff_without_water', label: '真のアルコール係数②' }
+      ];
 
-      const getDisplayValue = (value, isNumeric) => {
-        if (value === null || value === undefined) return '-';
-        if (isNumeric && typeof value === 'number') {
-          return value.toFixed(2);
-        }
-        return value;
-      };
+      const dailyMetrics = [
+        '品温1回目', '1日の品温の変動', 'ボーメ（補完）', 'アルコール（補完）', 
+        'BMD（補完）', '追水'
+      ];
 
-      // 統計計算
-      const getColumnStats = (columnKey, isNumeric) => {
-        if (!isNumeric) return null;
-        
-        const values = selectedTanks
-          .map(tank => getValue(tank, columnKey))
-          .filter(v => v !== null && v !== undefined && !isNaN(v));
-        
-        if (values.length === 0) return null;
-        
-        const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
-        const max = Math.max(...values);
-        const min = Math.min(...values);
-        
-        return { avg: avg.toFixed(2), max: max.toFixed(2), min: min.toFixed(2) };
-      };
+      const metaStats = columns.reduce((acc, col) => {
+        if (col.isNumeric) {
+          let values;
+          
+          if (col.key === 'true_alcohol_coeff_with_water') {
+            values = selectedTanks
+              .map(tank => {
+                const result = calculateTrueCoefficientsFromMeta(tank);
+                return result.withWater;
+              })
+              .filter(v => v !== null && v !== undefined && !isNaN(v));
+          } else if (col.key === 'true_alcohol_coeff_without_water') {
+            values = selectedTanks
+              .map(tank => {
+                const result = calculateTrueCoefficientsFromMeta(tank);
+                return result.withoutWater;
+              })
+              .filter(v => v !== null && v !== undefined && !isNaN(v));
+          } else {
+            values = selectedTanks
+              .map(tank => tank.metadata[col.key])
+              .filter(v => v !== null && v !== undefined);
+          }
+          
+          acc[col.key] = {
+            avg: values.length ? (values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2) : '-',
+            max: values.length ? Math.max(...values).toFixed(2) : '-',
+            min: values.length ? Math.min(...values).toFixed(2) : '-',
+          };
+        }
+        return acc;
+      }, {});
+      
+      const dailyStats = dailyMetrics.reduce((acc, metric) => {
+        const values = selectedTanks.flatMap(tank => {
+          if (!tank.dailyData) return [];
+          return Object.values(tank.dailyData)
+            .map(data => data[metric])
+            .filter(v => v !== null && v !== undefined);
+        });
+        acc[metric] = {
+          avg: values.length ? (values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2) : '-',
+          max: values.length ? Math.max(...values).toFixed(2) : '-',
+          min: values.length ? Math.min(...values).toFixed(2) : '-',
+        };
+        return acc;
+      }, {});
 
       return (
-        <div className="bg-white rounded-lg shadow border border-gray-200 p-4">
-          <h3 className="text-lg font-semibold mb-4 flex items-center">
-            <Database className="w-5 h-5 mr-2" />
-            メタデータ比較表 ({selectedTanks.length}個のタンク)
+        <div className="p-4">
+          <h3 className="text-lg font-semibold mb-4">
+            選択タンク比較 ({selectedTanks.length}個のタンク)
           </h3>
           
           <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse border border-gray-300">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="border border-gray-300 p-2 text-left">項目</th>
-                  {selectedTanks.map(tank => (
-                    <th key={tank.tankId} className="border border-gray-300 p-2 text-center">
-                      {tank.tankId}
-                    </th>
-                  ))}
-                  <th className="border border-gray-300 p-2 text-center bg-blue-50">平均</th>
-                  <th className="border border-gray-300 p-2 text-center bg-green-50">最大</th>
-                  <th className="border border-gray-300 p-2 text-center bg-red-50">最小</th>
+            <table className="w-full text-sm border-collapse">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="border border-gray-300 p-2">項目</th>
+                  <th className="border border-gray-300 p-2">平均</th>
+                  <th className="border border-gray-300 p-2">最大</th>
+                  <th className="border border-gray-300 p-2">最小</th>
                 </tr>
               </thead>
               <tbody>
-                {columns.map(col => {
-                  const stats = getColumnStats(col.key, col.isNumeric);
+                {metrics.map(metric => {
+                  const stats = metaStats[metric.key];
                   return (
-                    <tr key={col.key} className="hover:bg-gray-50">
-                      <td className="border border-gray-300 p-2 font-medium bg-gray-50">
-                        {col.label}
+                    <tr key={metric.key} className="hover:bg-gray-50">
+                      <td className="border border-gray-300 p-2 font-medium">
+                        {metric.label}
                       </td>
-                      {selectedTanks.map(tank => (
-                        <td key={tank.tankId} className="border border-gray-300 p-2 text-center">
-                          {getDisplayValue(getValue(tank, col.key), col.isNumeric)}
-                        </td>
-                      ))}
+                      <td className="border border-gray-300 p-2 text-center bg-blue-50">
+                        {stats ? stats.avg : '-'}
+                      </td>
+                      <td className="border border-gray-300 p-2 text-center bg-green-50">
+                        {stats ? stats.max : '-'}
+                      </td>
+                      <td className="border border-gray-300 p-2 text-center bg-red-50">
+                        {stats ? stats.min : '-'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          
+          <h3 className="text-lg font-semibold mt-4 mb-2">選択タンクの比較（日次データ）</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="border border-gray-300 p-2">項目</th>
+                  <th className="border border-gray-300 p-2">平均</th>
+                  <th className="border border-gray-300 p-2">最大</th>
+                  <th className="border border-gray-300 p-2">最小</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dailyMetrics.map(metric => {
+                  const stats = dailyStats[metric];
+                  return (
+                    <tr key={metric} className="hover:bg-gray-50">
+                      <td className="border border-gray-300 p-2 font-medium">
+                        {metric}
+                      </td>
                       <td className="border border-gray-300 p-2 text-center bg-blue-50">
                         {stats ? stats.avg : '-'}
                       </td>
@@ -315,7 +418,6 @@ function App() {
     }
   };
 
-  // FileUploadコンポーネント
   const FileUpload = ({ onFileUpload, isLoading }) => {
     const handleChange = (event) => {
       const file = event.target.files[0];
@@ -346,75 +448,23 @@ function App() {
           } text-white`}
         >
           <Upload className="w-4 h-4 mr-2" />
-          {isLoading ? 'アップロード中...' : 'ファイルを選択'}
+          {isLoading ? 'アップロード中...' : 'CSVファイルを選択'}
         </label>
+        {isLoading && (
+          <div className="mt-2 text-sm text-gray-600">
+            ファイルを解析しています...
+          </div>
+        )}
       </div>
     );
   };
 
-  // 改善されたDataTable（選択済みを上に表示）
-  const ImprovedDataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
-    // 選択済みタンクを上に、未選択を下に分けてソート
-    const sortedTanks = React.useMemo(() => {
-      if (!tanks || !Array.isArray(tanks)) return [];
-      
-      try {
-        const selectedTanks = tanks.filter(tank => 
-          tank && tank.tankId && selectedTankIds.includes(tank.tankId)
-        );
-        const unselectedTanks = tanks.filter(tank => 
-          tank && tank.tankId && !selectedTankIds.includes(tank.tankId)
-        );
-        
-        return [...selectedTanks, ...unselectedTanks];
-      } catch (error) {
-        console.error('Error sorting tanks:', error);
-        return tanks || [];
-      }
-    }, [tanks, selectedTankIds]);
-
-    if (!tanks || tanks.length === 0) {
-      return (
-        <div className="p-4 text-center text-gray-500">
-          データがありません
-        </div>
-      );
-    }
-
-    try {
-      return (
-        <DataTable 
-          tanks={sortedTanks} 
-          onSelectionChange={onSelectionChange} 
-          selectedTankIds={selectedTankIds}
-        />
-      );
-    } catch (error) {
-      console.error('Error rendering DataTable:', error);
-      return (
-        <div className="p-4 text-center text-red-500">
-          データテーブルの表示でエラーが発生しました: {error.message}
-        </div>
-      );
-    }
-  };
-
   return (
-    <div className="min-h-screen bg-gray-100 py-8 px-4">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-gray-50">
+      <div className="container mx-auto px-4 py-8">
         <ErrorBoundary>
-          {/* 1. CSVアップロード - 一番上に配置 */}
-          <div className="mb-6">
-            <FileUpload onFileUpload={handleFileUpload} isLoading={isLoading} />
-          </div>
-
-          {/* エラー表示 */}
-          {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-              <h3 className="text-red-800 font-semibold">エラー</h3>
-              <p className="text-red-600">{error}</p>
-            </div>
-          )}
+          {/* 1. ファイルアップロード */}
+          <FileUpload onFileUpload={handleFileUpload} isLoading={isLoading} />
 
           {tanks.length > 0 && (
             <>
@@ -462,6 +512,19 @@ function App() {
                   >
                     モデリング予測
                   </button>
+
+                  {/* 新規追加：品温分析ボタン */}
+                  <button
+                    onClick={handleTemperatureAnalyze}
+                    disabled={selectedTankIds.length === 0}
+                    className={`px-4 py-2 rounded text-white ${
+                      selectedTankIds.length === 0 
+                        ? 'bg-gray-400 cursor-not-allowed' 
+                        : 'bg-orange-600 hover:bg-orange-700'
+                    }`}
+                  >
+                    品温分析 ({selectedTankIds.length}個のタンクを選択中)
+                  </button>
                 </div>
               </div>
 
@@ -483,7 +546,7 @@ function App() {
                 
                 {showMetadata && (
                 <ErrorBoundary>
-                  <ImprovedDataTable 
+                  <DataTable 
                     tanks={tanks} 
                     onSelectionChange={handleSelectionChange} 
                     selectedTankIds={selectedTankIds}
@@ -536,6 +599,13 @@ function App() {
               {showPrediction && (
                 <ErrorBoundary>
                   <PredictionModeling tanks={tanks} selectedTankIds={selectedTankIds} />
+                </ErrorBoundary>
+              )}
+
+              {/* 9. 品温分析結果（新規追加） */}
+              {showTemperatureAnalysis && (
+                <ErrorBoundary>
+                  <TemperatureAnalysis tanks={tanks} selectedTankIds={selectedTankIds} />
                 </ErrorBoundary>
               )}
             </>

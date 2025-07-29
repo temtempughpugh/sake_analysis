@@ -1,5 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Database, ChevronDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { COLUMN_NAMES } from '../utils/csvParser';
+
+// 最高ボーメを計算する関数（日次データの「ボーメ（補完）」列から）
+const calculateMaxBaume = (tank) => {
+  if (!tank.dailyData || typeof tank.dailyData !== 'object') {
+    return null;
+  }
+  
+  const baumeValues = Object.values(tank.dailyData)
+    .map(data => parseFloat(data[COLUMN_NAMES.DAILY.BAUME_ESTIMATED]))
+    .filter(value => !isNaN(value));
+  
+  return baumeValues.length > 0 ? Math.max(...baumeValues) : null;
+};
 
 // 醪日数を計算する関数
 const calculateMoromiDays = (tank) => {
@@ -15,6 +29,57 @@ const calculateMoromiDays = (tank) => {
     .filter(day => day !== null && !isNaN(day));
   
   return dayNumbers.length > 0 ? Math.max(...dayNumbers) : null;
+};
+
+// AB開始アルコール計測日を特定する関数
+const getAlcoholStartDay = (tank) => {
+  if (!tank.dailyData || typeof tank.dailyData !== 'object') {
+    return null;
+  }
+  
+  // 日次データからアルコール（補完）があるエントリを取得
+  const dailyEntries = Object.entries(tank.dailyData)
+    .map(([day, data]) => ({
+      day: parseInt(day),
+      alcohol: parseFloat(data[COLUMN_NAMES.DAILY.ALCOHOL_ESTIMATED]) || null
+    }))
+    .filter(entry => entry.alcohol !== null && entry.alcohol > 0)
+    .sort((a, b) => a.day - b.day);
+  
+  // 最初のアルコール計測日を返す
+  return dailyEntries.length > 0 ? dailyEntries[0].day : null;
+};
+
+// 前半追い水量を計算する関数
+const calculateEarlyWaterAmount = (tank) => {
+  const alcoholStartDay = getAlcoholStartDay(tank);
+  if (!alcoholStartDay || !tank.dailyData) {
+    return null;
+  }
+  
+  let earlyWaterAmount = 0;
+  Object.entries(tank.dailyData).forEach(([day, data]) => {
+    const dayNum = parseInt(day);
+    const waterAmount = parseFloat(data[COLUMN_NAMES.DAILY.WATER]) || 0;
+    // AB開始アルコール計測日の前日まで（その日は含まない）
+    if (dayNum < alcoholStartDay && waterAmount > 0) {
+      earlyWaterAmount += waterAmount;
+    }
+  });
+  
+  return earlyWaterAmount;
+};
+
+// 前半追い水歩合を計算する関数
+const calculateEarlyWaterRatio = (tank) => {
+  const earlyWaterAmount = calculateEarlyWaterAmount(tank);
+  const totalWaterAmount = parseFloat(tank.metadata?.[COLUMN_NAMES.META.TOTAL_WATER]) || 0;
+  
+  if (earlyWaterAmount === null || totalWaterAmount === 0) {
+    return null;
+  }
+  
+  return parseFloat((earlyWaterAmount / totalWaterAmount).toFixed(2));
 };
 
 const calculateTrueCoefficientsFromMeta = (tank) => {
@@ -73,7 +138,7 @@ const calculateTrueCoefficientsFromMeta = (tank) => {
   };
 };
 
-const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
+const DataTable = ({ tanks, selectedTankIds, onSelectionChange }) => {
   const [sortConfigs, setSortConfigs] = useState(() => {
     const saved = localStorage.getItem('sortConfigs');
     return saved ? JSON.parse(saved) : [];
@@ -86,75 +151,110 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
     const saved = localStorage.getItem('rangeFilters');
     return saved ? JSON.parse(saved) : {};
   });
-  const [activeFilter, setActiveFilter] = useState(null);
-  const [filterSearch, setFilterSearch] = useState('');
-  const [filterPosition, setFilterPosition] = useState({ left: 0, top: 0 });
-  const filterRef = useRef(null);
-  const tableRef = useRef(null);
-
-  const columns = [
-    { key: '順号', label: '順号', fixed: true, isNumeric: true },
-    { key: '醪日数', label: '醪日数', fixed: true, isNumeric: true }, // 醪日数を順号の次に追加
-    { key: '仕込み規模', label: '仕込み規模', fixed: true, isNumeric: true },
-    { key: '酵母', label: '酵母', fixed: true, isNumeric: false },
-    { key: '酒質設計', label: '酒質設計', fixed: true, isNumeric: false },
-    { key: '特定名称', label: '特定名称', fixed: false, isNumeric: false },
-    { key: '仕込み総量', label: '仕込み総量', fixed: false, isNumeric: true },
-    { key: '5日までの積算品温', label: '積算品温(5日)', fixed: false, isNumeric: true },
-    { key: '最高ボーメ', label: '最高ボーメ', fixed: false, isNumeric: true },
-    { key: 'AB開始ボーメ', label: 'AB開始ボーメ', fixed: false, isNumeric: true },
-    { key: 'AB開始アルコール', label: 'AB開始アルコール', fixed: false, isNumeric: true },
-    { key: '最終ボーメ', label: '最終ボーメ', fixed: false, isNumeric: true },
-    { key: '最終アルコール度数', label: '最終アルコール', fixed: false, isNumeric: true },
-    { key: '最高BMD', label: '最高BMD', fixed: false, isNumeric: true },
-    { key: '最高BMD日数', label: '最高BMD日数', fixed: false, isNumeric: true },
-    // 真のアルコール係数を追加（最高BMD日数と追い水総量の間）
-    { key: 'true_alcohol_coeff_with_water', label: '真のアルコール係数①', fixed: false, isNumeric: true },
-    { key: 'true_alcohol_coeff_without_water', label: '真のアルコール係数②', fixed: false, isNumeric: true },
-    { key: '追い水総量', label: '追い水総量', fixed: false, isNumeric: true },
-    { key: '追い水歩合', label: '追い水歩合', fixed: false, isNumeric: true },
-    { key: '後半追い水量', label: '後半追い水量', fixed: false, isNumeric: true },
-    { key: '後半追い水割合', label: '後半追い水割合', fixed: false, isNumeric: true },
-  ];
-
   const [visibleColumns, setVisibleColumns] = useState(() => {
     const saved = localStorage.getItem('visibleColumns');
     if (saved) {
-      return new Set(JSON.parse(saved));
+      const parsed = JSON.parse(saved);
+      return new Set(parsed);
     }
-    return new Set(columns.map(col => col.key));
+    // デフォルトでは全カラムを表示
+    return new Set([
+      COLUMN_NAMES.META.TANK_NUMBER,
+      COLUMN_NAMES.META.BATCH_SIZE,
+      COLUMN_NAMES.META.YEAST,
+      COLUMN_NAMES.META.DESIGN,
+      COLUMN_NAMES.META.SPECIFIC_NAME,
+      COLUMN_NAMES.META.TOTAL_VOLUME,
+      COLUMN_NAMES.META.TEMP_SUM_5DAYS,
+      COLUMN_NAMES.META.MAX_BAUME,
+      COLUMN_NAMES.META.AB_START_BAUME,
+      COLUMN_NAMES.META.AB_START_ALCOHOL,
+      COLUMN_NAMES.META.FINAL_BAUME,
+      COLUMN_NAMES.META.FINAL_ALCOHOL,
+      COLUMN_NAMES.META.MAX_BMD,
+      COLUMN_NAMES.META.MAX_BMD_DAY,
+      COLUMN_NAMES.META.TOTAL_WATER,
+      COLUMN_NAMES.META.WATER_RATIO,
+      '真のアルコール係数（追い水反映）',
+      '真のアルコール係数（追い水無視）',
+      'EARLY_WATER_AMOUNT', // 前半追い水量
+      'EARLY_WATER_RATIO',  // 前半追い水歩合
+      COLUMN_NAMES.META.LATE_WATER,
+      COLUMN_NAMES.META.LATE_WATER_RATIO,
+    ]);
   });
+  const [activeFilter, setActiveFilter] = useState(null);
+  const [filterPosition, setFilterPosition] = useState({ left: 0, top: 0 });
+  const [filterSearch, setFilterSearch] = useState('');
+  const tableRef = useRef(null);
+  const filterRef = useRef(null);
 
-  const displayColumns = columns.filter(col => visibleColumns.has(col.key));
-
-  const toggleColumn = (columnKey) => {
-    const newVisible = new Set(visibleColumns);
-    if (newVisible.has(columnKey)) {
-      newVisible.delete(columnKey);
-    } else {
-      newVisible.add(columnKey);
-    }
-    setVisibleColumns(newVisible);
-    localStorage.setItem('visibleColumns', JSON.stringify([...newVisible]));
-  };
-
-  const dailyMetrics = [
-    '品温1回目',
-    'ボーメ（追い水後）',
-    'アルコール（追い水後）',
-    'BMD（補完）',
-    'アルコール係数（追い水反映）',
+  // 列定義に前半追い水量・歩合と真のアルコール係数を追加
+  const columns = [
+    { key: COLUMN_NAMES.META.TANK_NUMBER, label: '順号', fixed: true, isNumeric: true },
+    { key: COLUMN_NAMES.META.BATCH_SIZE, label: '仕込み規模', fixed: true, isNumeric: true },
+    { key: COLUMN_NAMES.META.YEAST, label: '酵母', fixed: true, isNumeric: false },
+    { key: COLUMN_NAMES.META.DESIGN, label: '酒質設計', fixed: true, isNumeric: false },
+    { key: COLUMN_NAMES.META.SPECIFIC_NAME, label: '特定名称', fixed: false, isNumeric: false },
+    { key: COLUMN_NAMES.META.TOTAL_VOLUME, label: '仕込み総量', fixed: false, isNumeric: true },
+    { key: COLUMN_NAMES.META.TEMP_SUM_5DAYS, label: '5日までの積算品温', fixed: false, isNumeric: true },
+    { key: 'MAX_BAUME_CALCULATED', label: '最高ボーメ', fixed: false, isNumeric: true }, // 計算された最高ボーメ
+    { key: COLUMN_NAMES.META.AB_START_BAUME, label: 'AB開始ボーメ', fixed: false, isNumeric: true },
+    { key: COLUMN_NAMES.META.AB_START_ALCOHOL, label: 'AB開始アルコール', fixed: false, isNumeric: true },
+    { key: COLUMN_NAMES.META.FINAL_BAUME, label: '最終ボーメ', fixed: false, isNumeric: true },
+    { key: COLUMN_NAMES.META.FINAL_ALCOHOL, label: '最終アルコール度数', fixed: false, isNumeric: true },
+    { key: COLUMN_NAMES.META.MAX_BMD, label: '最高BMD', fixed: false, isNumeric: true },
+    { key: COLUMN_NAMES.META.MAX_BMD_DAY, label: '最高BMD日数', fixed: false, isNumeric: true },
+    // 真のアルコール係数を追加（最高BMD日数と追い水総量の間）
+    { key: '真のアルコール係数（追い水反映）', label: '真のアルコール係数①', fixed: false, isNumeric: true },
+    { key: '真のアルコール係数（追い水無視）', label: '真のアルコール係数②', fixed: false, isNumeric: true },
+    { key: COLUMN_NAMES.META.TOTAL_WATER, label: '追い水総量', fixed: false, isNumeric: true },
+    { key: COLUMN_NAMES.META.WATER_RATIO, label: '追い水歩合', fixed: false, isNumeric: true },
+    { key: 'EARLY_WATER_AMOUNT', label: '前半追い水量', fixed: false, isNumeric: true }, // NEW
+    { key: 'EARLY_WATER_RATIO', label: '前半追い水歩合', fixed: false, isNumeric: true }, // NEW
+    { key: COLUMN_NAMES.META.LATE_WATER, label: '後半追い水量', fixed: false, isNumeric: true },
+    { key: COLUMN_NAMES.META.LATE_WATER_RATIO, label: '後半追い水割合', fixed: false, isNumeric: true },
   ];
 
+  const dailyMetrics = [
+    COLUMN_NAMES.DAILY.TEMP_1,
+    COLUMN_NAMES.DAILY.BAUME_AFTER_WATER,
+    COLUMN_NAMES.DAILY.ALCOHOL_AFTER_WATER,
+    COLUMN_NAMES.DAILY.BMD_COMPLEMENT
+  ];
+
+  // タンクデータを処理
+  const processedTanks = tanks ? tanks.map(tank => {
+    const coefficients = calculateTrueCoefficientsFromMeta(tank);
+    const moromiDays = calculateMoromiDays(tank);
+    const earlyWaterAmount = calculateEarlyWaterAmount(tank);
+    const earlyWaterRatio = calculateEarlyWaterRatio(tank);
+    const maxBaume = calculateMaxBaume(tank); // 最高ボーメ計算
+    
+    return {
+      ...tank,
+      metadata: {
+        ...tank.metadata,
+        'MAX_BAUME_CALCULATED': maxBaume, // 計算された最高ボーメ
+        'EARLY_WATER_AMOUNT': earlyWaterAmount, // 前半追い水量
+        'EARLY_WATER_RATIO': earlyWaterRatio,   // 前半追い水歩合
+        '真のアルコール係数（追い水反映）': coefficients.withWater?.toFixed(2) || null,
+        '真のアルコール係数（追い水無視）': coefficients.withoutWater?.toFixed(2) || null,
+        '醪日数': moromiDays
+      }
+    };
+  }) : [];
+
+  // データの保存
   useEffect(() => {
     localStorage.setItem('sortConfigs', JSON.stringify(sortConfigs));
   }, [sortConfigs]);
 
   useEffect(() => {
-    const serializedFilters = Object.fromEntries(
+    const filtersForStorage = Object.fromEntries(
       Object.entries(filters).map(([key, value]) => [key, Array.from(value)])
     );
-    localStorage.setItem('filters', JSON.stringify(serializedFilters));
+    localStorage.setItem('filters', JSON.stringify(filtersForStorage));
   }, [filters]);
 
   useEffect(() => {
@@ -162,291 +262,205 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
   }, [rangeFilters]);
 
   useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (filterRef.current && !filterRef.current.contains(event.target)) {
-        setActiveFilter(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    localStorage.setItem('visibleColumns', JSON.stringify(Array.from(visibleColumns)));
+  }, [visibleColumns]);
 
-  const handleSelectTank = (tankId) => {
-    const newSelected = selectedTankIds.includes(tankId)
-      ? selectedTankIds.filter(id => id !== tankId)
-      : [...selectedTankIds, tankId];
-    onSelectionChange(newSelected);
-  };
-
-  const handleSelectAll = () => {
-    if (selectedTankIds.length === processedTanks.length) {
-      onSelectionChange([]);
-    } else {
-      onSelectionChange(processedTanks.map(tank => tank.tankId));
-    }
-  };
-
-  const applyFilters = (tanks) => {
-    return tanks.filter(tank => {
-      for (const [key, filterSet] of Object.entries(filters)) {
-        if (filterSet.size === 0) continue;
+  // フィルター・ソート処理
+  const filteredAndSortedTanks = processedTanks
+    .filter(tank => {
+      return Object.entries(filters).every(([column, values]) => {
+        if (!values || values.size === 0) return true;
+        const value = tank.metadata[column];
+        return values.has(value);
+      });
+    })
+    .filter(tank => {
+      return Object.entries(rangeFilters).every(([column, range]) => {
+        if (!range) return true;
+        const value = parseFloat(tank.metadata[column]);
+        if (isNaN(value)) return true;
+        return (!range.min || value >= range.min) && (!range.max || value <= range.max);
+      });
+    })
+    .sort((a, b) => {
+      for (const config of sortConfigs) {
+        const aValue = a.metadata[config.key];
+        const bValue = b.metadata[config.key];
         
-        let value;
-        if (key === 'true_alcohol_coeff_with_water') {
-          const result = calculateTrueCoefficientsFromMeta(tank);
-          value = result.withWater !== null ? result.withWater.toFixed(3) : '-';
-        } else if (key === 'true_alcohol_coeff_without_water') {
-          const result = calculateTrueCoefficientsFromMeta(tank);
-          value = result.withoutWater !== null ? result.withoutWater.toFixed(3) : '-';
-        } else if (key === '醪日数') {
-          const moromiDays = calculateMoromiDays(tank);
-          value = moromiDays !== null ? moromiDays.toString() : '-';
-        } else {
-          value = tank.metadata[key];
-        }
+        if (aValue === null && bValue === null) continue;
+        if (aValue === null) return 1;
+        if (bValue === null) return -1;
         
-        if (value == null) value = '-';
-        if (!filterSet.has(String(value))) return false;
-      }
-      
-      for (const [key, range] of Object.entries(rangeFilters)) {
-        if (!range.min && !range.max) continue;
-        
-        let numValue;
-        if (key === 'true_alcohol_coeff_with_water') {
-          const result = calculateTrueCoefficientsFromMeta(tank);
-          numValue = result.withWater;
-        } else if (key === 'true_alcohol_coeff_without_water') {
-          const result = calculateTrueCoefficientsFromMeta(tank);
-          numValue = result.withoutWater;
-        } else if (key === '醪日数') {
-          numValue = calculateMoromiDays(tank);
-        } else {
-          numValue = Number(tank.metadata[key]);
-        }
-        
-        if (isNaN(numValue)) continue;
-        if (range.min && numValue < Number(range.min)) return false;
-        if (range.max && numValue > Number(range.max)) return false;
-      }
-      
-      return true;
-    });
-  };
-
-  const applySorts = (tanks) => {
-    if (sortConfigs.length === 0) return tanks;
-    
-    return [...tanks].sort((a, b) => {
-      for (const { key, direction } of sortConfigs) {
-        let aValue, bValue;
-        
-        if (key === 'true_alcohol_coeff_with_water') {
-          try {
-            const aResult = calculateTrueCoefficientsFromMeta(a);
-            const bResult = calculateTrueCoefficientsFromMeta(b);
-            aValue = aResult ? aResult.withWater : null;
-            bValue = bResult ? bResult.withWater : null;
-          } catch (e) {
-            aValue = null;
-            bValue = null;
-          }
-        } else if (key === 'true_alcohol_coeff_without_water') {
-          try {
-            const aResult = calculateTrueCoefficientsFromMeta(a);
-            const bResult = calculateTrueCoefficientsFromMeta(b);
-            aValue = aResult ? aResult.withoutWater : null;
-            bValue = bResult ? bResult.withoutWater : null;
-          } catch (e) {
-            aValue = null;
-            bValue = null;
-          }
-        } else if (key === '醪日数') {
-          aValue = calculateMoromiDays(a);
-          bValue = calculateMoromiDays(b);
-        } else {
-          aValue = a.metadata[key];
-          bValue = b.metadata[key];
-        }
-        
-        // null処理
-        if (aValue == null && bValue == null) continue;
-        if (aValue == null) return 1;
-        if (bValue == null) return -1;
-        
-        // 数値型と文字列型を区別してソート
-        const column = columns.find(col => col.key === key);
+        const column = columns.find(col => col.key === config.key);
         let comparison;
         
-        if (column && column.isNumeric) {
-          comparison = Number(aValue) - Number(bValue);
+        if (column?.isNumeric) {
+          comparison = parseFloat(aValue) - parseFloat(bValue);
         } else {
           comparison = String(aValue).localeCompare(String(bValue));
         }
         
-        if (comparison !== 0) return direction === 'asc' ? comparison : -comparison;
+        if (comparison !== 0) {
+          return config.direction === 'asc' ? comparison : -comparison;
+        }
       }
       return 0;
     });
+
+  // 表示するカラムを取得
+  const displayColumns = columns.filter(col => visibleColumns.has(col.key));
+
+  // イベントハンドラー
+  const handleSelectAll = () => {
+    const allIds = filteredAndSortedTanks.map(tank => tank.tankId);
+    const isAllSelected = allIds.length > 0 && allIds.every(id => selectedTankIds.includes(id));
+    
+    if (isAllSelected) {
+      onSelectionChange(selectedTankIds.filter(id => !allIds.includes(id)));
+    } else {
+      onSelectionChange([...new Set([...selectedTankIds, ...allIds])]);
+    }
   };
 
-  const handleSortFromMenu = (key, direction) => {
-    console.log('handleSortFromMenu called:', key, direction);
-    setSortConfigs(prev => {
-      const newConfigs = prev.filter(config => config.key !== key);
-      newConfigs.push({ key, direction });
-      console.log('New sortConfigs:', newConfigs);
-      return newConfigs;
-    });
+  const handleTankSelection = (tankId) => {
+    if (selectedTankIds.includes(tankId)) {
+      onSelectionChange(selectedTankIds.filter(id => id !== tankId));
+    } else {
+      onSelectionChange([...selectedTankIds, tankId]);
+    }
   };
 
-  const clearSort = (key) => {
-    setSortConfigs(prev => prev.filter(config => config.key !== key));
+  const toggleColumn = (columnKey) => {
+    const newVisibleColumns = new Set(visibleColumns);
+    if (newVisibleColumns.has(columnKey)) {
+      newVisibleColumns.delete(columnKey);
+    } else {
+      newVisibleColumns.add(columnKey);
+    }
+    setVisibleColumns(newVisibleColumns);
   };
 
   const getSortConfig = (key) => {
     return sortConfigs.find(config => config.key === key);
   };
 
-  const getSortPriority = (key) => {
-    const index = sortConfigs.findIndex(config => config.key === key);
-    return index !== -1 ? index + 1 : null;
-  };
-
-  const handleFilterButtonClick = (e, colKey) => {
-    const th = e.currentTarget.closest('th');
-    const rect = th.getBoundingClientRect(); // これで画面上の絶対位置が取得される
+  const handleSort = (key) => {
+    const existingIndex = sortConfigs.findIndex(config => config.key === key);
     
-    // フィルターポップアップのサイズ
-    const popupWidth = 250;
-    const popupHeight = 300;
-    
-    // 画面サイズを取得
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    
-    // 基本位置（ヘッダーの直下、画面上の絶対位置）
-    let left = rect.left;
-    let top = rect.bottom;
-    
-    // 右端がはみ出る場合は左にずらす
-    if (left + popupWidth > viewportWidth) {
-      left = viewportWidth - popupWidth - 10;
-    }
-    
-    // 下端がはみ出る場合は上に表示
-    if (top + popupHeight > viewportHeight) {
-      top = rect.top - popupHeight - 5; // ヘッダーの上に表示
-    }
-    
-    // 左端がはみ出る場合の調整
-    if (left < 10) {
-      left = 10;
-    }
-    
-    // 上端がはみ出る場合の調整
-    if (top < 10) {
-      top = 10;
-    }
-    
-    setFilterPosition({ left, top });
-    setActiveFilter(activeFilter === colKey ? null : colKey);
-    setFilterSearch('');
-  };
-
-  const getColumnValues = (key) => {
-    const values = new Set();
-    tanks.forEach(tank => {
-      let value;
-      if (key === 'true_alcohol_coeff_with_water') {
-        const result = calculateTrueCoefficientsFromMeta(tank);
-        value = result.withWater !== null ? result.withWater.toFixed(3) : '-';
-      } else if (key === 'true_alcohol_coeff_without_water') {
-        const result = calculateTrueCoefficientsFromMeta(tank);
-        value = result.withoutWater !== null ? result.withoutWater.toFixed(3) : '-';
-      } else if (key === '醪日数') {
-        const moromiDays = calculateMoromiDays(tank);
-        value = moromiDays !== null ? moromiDays.toString() : '-';
+    if (existingIndex !== -1) {
+      const existing = sortConfigs[existingIndex];
+      const newSortConfigs = [...sortConfigs];
+      
+      if (existing.direction === 'asc') {
+        newSortConfigs[existingIndex] = { ...existing, direction: 'desc' };
       } else {
-        value = tank.metadata[key];
+        newSortConfigs.splice(existingIndex, 1);
       }
       
-      if (value == null) value = '-';
-      values.add(String(value));
-    });
-    return Array.from(values).sort((a, b) => {
-      const numA = Number(a);
-      const numB = Number(b);
-      if (!isNaN(numA) && !isNaN(numB)) {
-        return numA - numB;
-      }
-      return a.localeCompare(b);
-    });
+      setSortConfigs(newSortConfigs);
+    } else {
+      setSortConfigs([{ key, direction: 'asc' }, ...sortConfigs]);
+    }
   };
 
-  const handleFilterChange = (key, value, checked) => {
+  const handleSortFromMenu = (key, direction) => {
+    const newSortConfigs = sortConfigs.filter(config => config.key !== key);
+    setSortConfigs([{ key, direction }, ...newSortConfigs]);
+    setActiveFilter(null);
+  };
+
+  const clearSort = (key) => {
+    setSortConfigs(sortConfigs.filter(config => config.key !== key));
+    setActiveFilter(null);
+  };
+
+  const getColumnValues = (columnKey) => {
+    const values = processedTanks.map(tank => tank.metadata[columnKey]);
+    return [...new Set(values.filter(v => v !== null && v !== undefined))];
+  };
+
+  const handleFilterChange = (column, value, checked) => {
     setFilters(prev => {
-      const newFilters = { ...prev };
-      if (!newFilters[key]) {
-        newFilters[key] = new Set();
-      } else {
-        newFilters[key] = new Set(newFilters[key]);
-      }
+      const current = prev[column] || new Set();
+      const updated = new Set(current);
       
       if (checked) {
-        newFilters[key].add(value);
+        updated.add(value);
       } else {
-        newFilters[key].delete(value);
+        updated.delete(value);
       }
       
-      return newFilters;
+      return { ...prev, [column]: updated };
     });
   };
 
-  const handleRangeFilterChange = (key, type, value) => {
+  const clearFilter = (column) => {
+    setFilters(prev => {
+      const updated = { ...prev };
+      delete updated[column];
+      return updated;
+    });
+  };
+
+  const clearAllFilters = () => {
+    setFilters({});
+    setRangeFilters({});
+  };
+
+  const handleRangeFilterChange = (column, type, value) => {
     setRangeFilters(prev => ({
       ...prev,
-      [key]: {
-        ...prev[key],
-        [type]: value
+      [column]: {
+        ...prev[column],
+        [type]: value === '' ? null : parseFloat(value)
       }
     }));
   };
 
-  const clearFilter = (key) => {
-    setFilters(prev => {
-      const newFilters = { ...prev };
-      delete newFilters[key];
-      return newFilters;
+  const openFilterMenu = (columnKey, event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setFilterPosition({
+      left: rect.left,
+      top: rect.bottom + window.scrollY
     });
-    setRangeFilters(prev => {
-      const newFilters = { ...prev };
-      delete newFilters[key];
-      return newFilters;
-    });
+    setActiveFilter(columnKey);
+    setFilterSearch('');
   };
 
-  const processedTanks = applySorts(applyFilters(tanks || []));
-
-  const selectedTanksData = processedTanks.filter(tank => selectedTankIds.includes(tank.tankId));
-
-  const metaStats = columns.filter(col => col.isNumeric).reduce((acc, col) => {
-    const values = selectedTanksData.map(tank => {
-      if (col.key === 'true_alcohol_coeff_with_water') {
-        const result = calculateTrueCoefficientsFromMeta(tank);
-        return result.withWater;
-      } else if (col.key === 'true_alcohol_coeff_without_water') {
-        const result = calculateTrueCoefficientsFromMeta(tank);
-        return result.withoutWater;
-      } else if (col.key === '醪日数') {
-        return calculateMoromiDays(tank);
-      } else {
-        return Number(tank.metadata[col.key]);
+  // フィルターメニュー外クリック処理
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (filterRef.current && !filterRef.current.contains(event.target)) {
+        setActiveFilter(null);
       }
-    }).filter(v => !isNaN(v) && v !== null);
+    };
+
+    if (activeFilter) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [activeFilter]);
+
+  const numericFields = [
+    COLUMN_NAMES.META.BATCH_SIZE, COLUMN_NAMES.META.TOTAL_VOLUME, COLUMN_NAMES.META.TEMP_SUM_5DAYS,
+    'MAX_BAUME_CALCULATED', // 計算された最高ボーメ
+    COLUMN_NAMES.META.AB_START_BAUME, COLUMN_NAMES.META.FINAL_BAUME,
+    COLUMN_NAMES.META.AB_START_ALCOHOL, COLUMN_NAMES.META.FINAL_ALCOHOL, COLUMN_NAMES.META.MAX_BMD,
+    COLUMN_NAMES.META.MAX_BMD_DAY, 
+    '真のアルコール係数（追い水反映）', '真のアルコール係数（追い水無視）', // 真のアルコール係数
+    COLUMN_NAMES.META.TOTAL_WATER, COLUMN_NAMES.META.WATER_RATIO,
+    'EARLY_WATER_AMOUNT', 'EARLY_WATER_RATIO', // 新しい数値項目
+    COLUMN_NAMES.META.LATE_WATER, COLUMN_NAMES.META.LATE_WATER_RATIO
+  ];
+
+  // 統計計算
+  const metadataStats = numericFields.reduce((acc, field) => {
+    const values = filteredAndSortedTanks
+      .map(tank => parseFloat(tank.metadata[field]))
+      .filter(v => !isNaN(v));
     
     if (values.length > 0) {
-      acc[col.key] = {
+      acc[field] = {
         avg: (values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2),
         max: Math.max(...values).toFixed(2),
         min: Math.min(...values).toFixed(2),
@@ -454,9 +468,9 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
     }
     return acc;
   }, {});
-  
+
   const dailyStats = dailyMetrics.reduce((acc, metric) => {
-    const values = selectedTanksData.flatMap(tank => {
+    const values = filteredAndSortedTanks.flatMap(tank => {
       if (!tank.dailyData) return [];
       return Object.values(tank.dailyData)
         .map(data => data[metric])
@@ -479,7 +493,7 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
         </h3>
         <div className="mt-2 flex space-x-4 text-sm text-gray-600">
           <span>総タンク数: {tanks?.length || 0}</span>
-          <span>表示中: {processedTanks.length}</span>
+          <span>表示中: {filteredAndSortedTanks.length}</span>
           <span>選択中: {selectedTankIds.length}</span>
         </div>
         <div className="mt-3 border-t pt-3">
@@ -512,137 +526,164 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
                 <input
                   type="checkbox"
                   onChange={handleSelectAll}
-                  checked={processedTanks.length > 0 && selectedTankIds.length === processedTanks.length}
+                  checked={filteredAndSortedTanks.length > 0 && selectedTankIds.length === filteredAndSortedTanks.length}
                   className="rounded border-gray-400"
                 />
               </th>
               {displayColumns.map(col => (
                 <th
                   key={col.key}
-                  className={`border border-gray-200 p-2 sticky top-0 ${col.fixed ? 'bg-blue-50 font-bold z-5' : 'bg-gray-100 z-10'} ${filters[col.key]?.size > 0 || rangeFilters[col.key] ? 'bg-yellow-100' : ''}`}
-                  style={{ minWidth: '100px', left: col.fixed ? `${50 + displayColumns.filter(c => c.fixed && displayColumns.indexOf(c) < displayColumns.indexOf(col)).length * 100}px` : 'auto' }}
+                  className={`border border-gray-200 p-2 sticky top-0 ${col.fixed ? 'bg-blue-50 font-bold sticky z-20' : 'bg-gray-100 z-10'} ${filters[col.key]?.size > 0 || rangeFilters[col.key] ? 'bg-yellow-100' : ''}`}
+                  style={{ 
+                    minWidth: '100px', 
+                    left: col.fixed ? `${50 + displayColumns.filter(c => c.fixed && displayColumns.indexOf(c) < displayColumns.indexOf(col)).length * 100}px` : 'auto',
+                    zIndex: col.fixed ? 20 : 10
+                  }}
                 >
-                  <div className="flex items-center justify-between space-x-1">
-                    <span className="truncate">{col.label}</span>
-                    <div className="flex items-center space-x-1">
+                  <div className="flex items-center justify-between">
+                    <span
+                      className="cursor-pointer hover:text-blue-600 flex items-center space-x-1"
+                      onClick={() => handleSort(col.key)}
+                    >
+                      <span>{col.label}</span>
                       {getSortConfig(col.key) && (
-                        <div className="flex items-center">
-                          {getSortConfig(col.key).direction === 'asc' ? 
-                            <ArrowUp className="w-3 h-3 text-blue-600" /> : 
-                            <ArrowDown className="w-3 h-3 text-blue-600" />
-                          }
-                          <span className="text-xs text-blue-600 ml-1">{getSortPriority(col.key)}</span>
-                        </div>
+                        getSortConfig(col.key).direction === 'asc' ? 
+                        <ArrowUp className="w-3 h-3" /> : 
+                        <ArrowDown className="w-3 h-3" />
                       )}
-                      <button
-                        onClick={(e) => handleFilterButtonClick(e, col.key)}
-                        className="p-1 hover:bg-gray-300 rounded"
-                      >
-                        <ChevronDown className="w-3 h-3" />
-                      </button>
-                    </div>
+                    </span>
+                    <ChevronDown
+                      className="w-4 h-4 cursor-pointer hover:text-blue-600"
+                      onClick={(e) => openFilterMenu(col.key, e)}
+                    />
                   </div>
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {processedTanks.map((tank, index) => (
-              <tr
-                key={tank.tankId}
-                className={`border-b ${selectedTankIds.includes(tank.tankId) ? 'bg-blue-100' : index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}
-              >
-                <td
-                  className="border border-gray-200 p-2 sticky left-0 z-5 bg-inherit"
-                  style={{ minWidth: '50px' }}
-                >
+            {filteredAndSortedTanks.map(tank => (
+              <tr key={tank.tankId} className="hover:bg-gray-50">
+                <td className="border border-gray-200 p-2 sticky left-0 bg-white z-20">
                   <input
                     type="checkbox"
                     checked={selectedTankIds.includes(tank.tankId)}
-                    onChange={() => handleSelectTank(tank.tankId)}
-                    className="rounded border-gray-400"
+                    onChange={() => handleTankSelection(tank.tankId)}
+                    className="rounded border-gray-300"
                   />
                 </td>
                 {displayColumns.map(col => (
-  <td
-    key={col.key}
-    className={`border border-gray-200 p-2 ${col.fixed ? 'sticky z-5 bg-inherit' : ''}`}
-    style={{ minWidth: '100px', left: col.fixed ? `${50 + displayColumns.filter(c => c.fixed && displayColumns.indexOf(c) < displayColumns.indexOf(col)).length * 100}px` : 'auto' }}
-  >
-    {(() => {
-      // 醪日数の場合
-      if (col.key === '醪日数') {
-        const moromiDays = calculateMoromiDays(tank);
-        return moromiDays !== null ? moromiDays : '-';
-      }
-      // 真のアルコール係数①の場合
-      else if (col.key === 'true_alcohol_coeff_with_water') {
-        const result = calculateTrueCoefficientsFromMeta(tank);
-        return result.withWater !== null ? result.withWater.toFixed(3) : '-';
-      } 
-      // 真のアルコール係数②の場合
-      else if (col.key === 'true_alcohol_coeff_without_water') {
-        const result = calculateTrueCoefficientsFromMeta(tank);
-        return result.withoutWater !== null ? result.withoutWater.toFixed(3) : '-';
-      } 
-      // 通常のメタデータ項目
-      else {
-        return tank.metadata[col.key] ?? '-';
-      }
-    })()}
-  </td>
-))}
+                  <td
+                    key={col.key}
+                    className={`border border-gray-200 p-2 ${col.fixed ? 'sticky bg-blue-50 font-medium z-15' : ''}`}
+                    style={{ 
+                      left: col.fixed ? `${50 + displayColumns.filter(c => c.fixed && displayColumns.indexOf(c) < displayColumns.indexOf(col)).length * 100}px` : 'auto',
+                      zIndex: col.fixed ? 15 : 1
+                    }}
+                  >
+                    {(() => {
+                      // 最高ボーメの場合（計算値）
+                      if (col.key === 'MAX_BAUME_CALCULATED') {
+                        return tank.metadata['MAX_BAUME_CALCULATED'] !== null ? tank.metadata['MAX_BAUME_CALCULATED'] : '-';
+                      }
+                      // 前半追い水量の場合
+                      else if (col.key === 'EARLY_WATER_AMOUNT') {
+                        return tank.metadata['EARLY_WATER_AMOUNT'] !== null ? tank.metadata['EARLY_WATER_AMOUNT'] : '-';
+                      }
+                      // 前半追い水歩合の場合
+                      else if (col.key === 'EARLY_WATER_RATIO') {
+                        return tank.metadata['EARLY_WATER_RATIO'] !== null ? tank.metadata['EARLY_WATER_RATIO'] : '-';
+                      }
+                      // 真のアルコール係数①の場合
+                      else if (col.key === '真のアルコール係数（追い水反映）') {
+                        return tank.metadata['真のアルコール係数（追い水反映）'] !== null ? tank.metadata['真のアルコール係数（追い水反映）'] : '-';
+                      } 
+                      // 真のアルコール係数②の場合
+                      else if (col.key === '真のアルコール係数（追い水無視）') {
+                        return tank.metadata['真のアルコール係数（追い水無視）'] !== null ? tank.metadata['真のアルコール係数（追い水無視）'] : '-';
+                      } 
+                      // 通常のメタデータ項目
+                      else {
+                        return tank.metadata[col.key] !== null && tank.metadata[col.key] !== undefined
+                          ? String(tank.metadata[col.key])
+                          : '-';
+                      }
+                    })()}
+                  </td>
+                ))}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      {selectedTanksData.length > 0 && (
-        <div className="p-4 border-t border-gray-200">
-          <h3 className="text-lg font-semibold mb-2">選択タンクの比較（メタデータ）</h3>
-          <table className="w-full text-sm border-collapse">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="border border-gray-200 p-2">項目</th>
-                <th className="border border-gray-200 p-2">平均</th>
-                <th className="border border-gray-200 p-2">最大</th>
-                <th className="border border-gray-200 p-2">最小</th>
-              </tr>
-            </thead>
-            <tbody>
-              {columns.filter(col => col.isNumeric).map(col => (
-                <tr key={col.key} className="border-b">
-                  <td className="border border-gray-200 p-2">{col.label}</td>
-                  <td className="border border-gray-200 p-2">{metaStats[col.key]?.avg || '-'}</td>
-                  <td className="border border-gray-200 p-2">{metaStats[col.key]?.max || '-'}</td>
-                  <td className="border border-gray-200 p-2">{metaStats[col.key]?.min || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <h3 className="text-lg font-semibold mt-4 mb-2">選択タンクの比較（日次データ）</h3>
-          <table className="w-full text-sm border-collapse">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="border border-gray-200 p-2">項目</th>
-                <th className="border border-gray-200 p-2">平均</th>
-                <th className="border border-gray-200 p-2">最大</th>
-                <th className="border border-gray-200 p-2">最小</th>
-              </tr>
-            </thead>
-            <tbody>
-              {dailyMetrics.map(metric => (
-                <tr key={metric} className="border-b">
-                  <td className="border border-gray-200 p-2">{metric}</td>
-                  <td className="border border-gray-200 p-2">{dailyStats[metric].avg}</td>
-                  <td className="border border-gray-200 p-2">{dailyStats[metric].max}</td>
-                  <td className="border border-gray-200 p-2">{dailyStats[metric].min}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      
+      {/* 統計情報 */}
+      <div className="p-4 border-t border-gray-200 bg-gray-50">
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-sm font-semibold text-gray-700">統計情報</h4>
+          <button
+            onClick={clearAllFilters}
+            className="px-3 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+          >
+            フィルターを全てクリア
+          </button>
         </div>
-      )}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <h5 className="text-xs font-medium text-gray-600 mb-2">メタデータ統計</h5>
+            <div className="overflow-auto max-h-32">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="border border-gray-200 p-1">項目</th>
+                    <th className="border border-gray-200 p-1">平均</th>
+                    <th className="border border-gray-200 p-1">最大</th>
+                    <th className="border border-gray-200 p-1">最小</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(metadataStats).map(([field, stats]) => (
+                    <tr key={field} className="border-b">
+                      <td className="border border-gray-200 p-1">
+                        {columns.find(col => col.key === field)?.label || field}
+                      </td>
+                      <td className="border border-gray-200 p-1">{stats.avg}</td>
+                      <td className="border border-gray-200 p-1">{stats.max}</td>
+                      <td className="border border-gray-200 p-1">{stats.min}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          
+          <div>
+            <h5 className="text-xs font-medium text-gray-600 mb-2">日次データ統計</h5>
+            <div className="overflow-auto max-h-32">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="border border-gray-200 p-1">項目</th>
+                    <th className="border border-gray-200 p-1">平均</th>
+                    <th className="border border-gray-200 p-1">最大</th>
+                    <th className="border border-gray-200 p-1">最小</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dailyMetrics.map(metric => (
+                    <tr key={metric} className="border-b">
+                      <td className="border border-gray-200 p-1">{metric}</td>
+                      <td className="border border-gray-200 p-1">{dailyStats[metric].avg}</td>
+                      <td className="border border-gray-200 p-1">{dailyStats[metric].max}</td>
+                      <td className="border border-gray-200 p-1">{dailyStats[metric].min}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* フィルターポップアップ */}
       {activeFilter && (
@@ -675,18 +716,17 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
                 <div className="flex space-x-2">
                   <input
                     type="number"
-                    placeholder="最小"
+                    placeholder="最小値"
                     value={rangeFilters[activeFilter]?.min || ''}
                     onChange={(e) => handleRangeFilterChange(activeFilter, 'min', e.target.value)}
-                    className="w-20 px-2 py-1 border border-gray-300 rounded text-xs"
+                    className="w-full px-2 py-1 text-xs border border-gray-300 rounded"
                   />
-                  <span className="self-center text-xs">〜</span>
                   <input
                     type="number"
-                    placeholder="最大"
+                    placeholder="最大値"
                     value={rangeFilters[activeFilter]?.max || ''}
                     onChange={(e) => handleRangeFilterChange(activeFilter, 'max', e.target.value)}
-                    className="w-20 px-2 py-1 border border-gray-300 rounded text-xs"
+                    className="w-full px-2 py-1 text-xs border border-gray-300 rounded"
                   />
                 </div>
               </div>
@@ -697,24 +737,31 @@ const DataTable = ({ tanks, onSelectionChange, selectedTankIds }) => {
               placeholder="検索..."
               value={filterSearch}
               onChange={(e) => setFilterSearch(e.target.value)}
-              className="w-full px-2 py-1 border border-gray-300 rounded text-sm mb-2"
+              className="w-full px-2 py-1 text-xs border border-gray-300 rounded mb-2"
             />
           </div>
           
-          <div className="space-y-1 max-h-32 overflow-y-auto">
-            <div className="flex items-center space-x-2 text-xs">
-              <button
-                onClick={() => {
-                  const values = getColumnValues(activeFilter);
-                  values.forEach(value => {
-                    handleFilterChange(activeFilter, value, !(filters[activeFilter]?.has(value) ?? false));
-                  });
-                }}
-                className="text-blue-600 hover:text-blue-800"
-              >
-                {filters[activeFilter]?.size === getColumnValues(activeFilter).length ? 'すべて解除' : 'すべて選択'}
-              </button>
-            </div>
+          <div className="space-y-1 max-h-40 overflow-auto">
+            <button
+              onClick={() => {
+                const allValues = getColumnValues(activeFilter);
+                const currentFilter = filters[activeFilter] || new Set();
+                const allSelected = allValues.every(value => currentFilter.has(value));
+                
+                if (allSelected) {
+                  clearFilter(activeFilter);
+                } else {
+                  setFilters(prev => ({
+                    ...prev,
+                    [activeFilter]: new Set(allValues)
+                  }));
+                }
+              }}
+              className="w-full text-left px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+            >
+              {getColumnValues(activeFilter).every(value => filters[activeFilter]?.has(value)) ? 
+                'すべて解除' : 'すべて選択'}
+            </button>
             {getColumnValues(activeFilter)
               .filter(value => 
                 filterSearch === '' || 
