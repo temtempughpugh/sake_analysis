@@ -53,6 +53,7 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
           tankId,
           day,
           moromiDays: maxDay, // 醪日数（そのタンクの最終日数）
+          batchSize: tank.metadata[COLUMN_NAMES.META.BATCH_SIZE] || null, // 仕込み規模
           seq: tank.metadata[COLUMN_NAMES.META.TANK_NUMBER] || tankId,
           temp1: (() => {
             const val = dayData[COLUMN_NAMES.DAILY.TEMP_1];
@@ -97,6 +98,15 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
         let alcoholWithoutWater = null;
         let bmdWithoutWater = null;
         let alcoholEstimatedValue = null;
+        let baumeEstimatedValue = null;
+
+        // ボーメ（補完）の値を取得
+        if (baumeEstimated !== null && baumeEstimated !== undefined && !isNaN(baumeEstimated)) {
+          const estimated = Number(baumeEstimated);
+          if (isFinite(estimated) && Math.abs(estimated) < 1000) {
+            baumeEstimatedValue = estimated;
+          }
+        }
 
         // アルコール（補完）の値を取得
         if (alcoholEstimated !== null && alcoholEstimated !== undefined && !isNaN(alcoholEstimated)) {
@@ -126,6 +136,7 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
           baumeWithoutWater,
           alcoholWithoutWater,
           alcoholEstimated: alcoholEstimatedValue,
+          baumeEstimated: baumeEstimatedValue,
           bmdWithoutWater,
           cumulativeWater,
           dilutionFactor
@@ -284,6 +295,10 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
             aValue = a.moromiDays ? Number(a.moromiDays) : 0;
             bValue = b.moromiDays ? Number(b.moromiDays) : 0;
             break;
+          case 'batchSize':
+            aValue = a.batchSize ? Number(a.batchSize) : 0;
+            bValue = b.batchSize ? Number(b.batchSize) : 0;
+            break;
           case 'temp1':
             aValue = (a.temp1 !== null && a.temp1 !== undefined) ? Number(a.temp1) : -999;
             bValue = (b.temp1 !== null && b.temp1 !== undefined) ? Number(b.temp1) : -999;
@@ -296,17 +311,13 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
             aValue = (a.baumeWithoutWater !== null && a.baumeWithoutWater !== undefined) ? Number(a.baumeWithoutWater) : -999;
             bValue = (b.baumeWithoutWater !== null && b.baumeWithoutWater !== undefined) ? Number(b.baumeWithoutWater) : -999;
             break;
+          case 'baumeEstimated':
+            aValue = (a.baumeEstimated !== null && a.baumeEstimated !== undefined) ? Number(a.baumeEstimated) : -999;
+            bValue = (b.baumeEstimated !== null && b.baumeEstimated !== undefined) ? Number(b.baumeEstimated) : -999;
+            break;
           case 'baumeChange':
             aValue = (a.baumeChange !== null && a.baumeChange !== undefined) ? Number(a.baumeChange) : -999;
             bValue = (b.baumeChange !== null && b.baumeChange !== undefined) ? Number(b.baumeChange) : -999;
-            break;
-          case 'bmdWithoutWater':
-            aValue = (a.bmdWithoutWater !== null && a.bmdWithoutWater !== undefined) ? Number(a.bmdWithoutWater) : -999;
-            bValue = (b.bmdWithoutWater !== null && b.bmdWithoutWater !== undefined) ? Number(b.bmdWithoutWater) : -999;
-            break;
-          case 'bmdChange':
-            aValue = (a.bmdChange !== null && a.bmdChange !== undefined) ? Number(a.bmdChange) : -999;
-            bValue = (b.bmdChange !== null && b.bmdChange !== undefined) ? Number(b.bmdChange) : -999;
             break;
           case 'addedWater':
             aValue = a.addedWater ? Number(a.addedWater) : 0;
@@ -318,8 +329,8 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
         }
 
         // NaN チェック
-        if (isNaN(aValue)) aValue = field === 'addedWater' || field === 'seq' || field === 'day' || field === 'moromiDays' ? 0 : -999;
-        if (isNaN(bValue)) bValue = field === 'addedWater' || field === 'seq' || field === 'day' || field === 'moromiDays' ? 0 : -999;
+        if (isNaN(aValue)) aValue = field === 'addedWater' || field === 'seq' || field === 'day' || field === 'moromiDays' || field === 'batchSize' ? 0 : -999;
+        if (isNaN(bValue)) bValue = field === 'addedWater' || field === 'seq' || field === 'day' || field === 'moromiDays' || field === 'batchSize' ? 0 : -999;
 
         let result = 0;
         if (order === 'asc') {
@@ -509,6 +520,12 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
                   </th>
                   <th 
                     className="border border-gray-300 p-2 cursor-pointer hover:bg-gray-200 select-none"
+                    onClick={() => handleBaumeSort('batchSize')}
+                  >
+                    仕込み規模{getSortIcon('batchSize')}
+                  </th>
+                  <th 
+                    className="border border-gray-300 p-2 cursor-pointer hover:bg-gray-200 select-none"
                     onClick={() => handleBaumeSort('temp1')}
                   >
                     品温1回目{getSortIcon('temp1')}
@@ -522,6 +539,12 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
                   <th className="border border-gray-300 p-2">品温上下</th>
                   <th 
                     className="border border-gray-300 p-2 bg-yellow-50 cursor-pointer hover:bg-yellow-100 select-none"
+                    onClick={() => handleBaumeSort('baumeEstimated')}
+                  >
+                    ボーメ（補完）{getSortIcon('baumeEstimated')}
+                  </th>
+                  <th 
+                    className="border border-gray-300 p-2 bg-yellow-50 cursor-pointer hover:bg-yellow-100 select-none"
                     onClick={() => handleBaumeSort('baumeWithoutWater')}
                   >
                     ボーメ(追い水無視){getSortIcon('baumeWithoutWater')}
@@ -531,18 +554,6 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
                     onClick={() => handleBaumeSort('baumeChange')}
                   >
                     ボーメ変動{getSortIcon('baumeChange')}
-                  </th>
-                  <th 
-                    className="border border-gray-300 p-2 bg-purple-50 cursor-pointer hover:bg-purple-100 select-none"
-                    onClick={() => handleBaumeSort('bmdWithoutWater')}
-                  >
-                    BMD(追い水無視){getSortIcon('bmdWithoutWater')}
-                  </th>
-                  <th 
-                    className="border border-gray-300 p-2 bg-purple-50 cursor-pointer hover:bg-purple-100 select-none"
-                    onClick={() => handleBaumeSort('bmdChange')}
-                  >
-                    BMD変動{getSortIcon('bmdChange')}
                   </th>
                   <th 
                     className="border border-gray-300 p-2 cursor-pointer hover:bg-gray-200 select-none"
@@ -564,6 +575,9 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
                     <td className="border border-gray-300 p-2 text-center">
                       {data.moromiDays}
                     </td>
+                    <td className="border border-gray-300 p-2 text-center">
+                      {data.batchSize || '-'}
+                    </td>
                     <td className={`border border-gray-300 p-2 text-center ${getTempClass(data.temp1)}`}>
                       {formatNumber(data.temp1, 1)}
                     </td>
@@ -574,16 +588,13 @@ const TemperatureAnalysis = ({ tanks, selectedTankIds }) => {
                       {getUpDownSymbol(data.tempUpDown)}
                     </td>
                     <td className="border border-gray-300 p-2 text-center bg-yellow-50">
+                      {formatNumber(data.baumeEstimated)}
+                    </td>
+                    <td className="border border-gray-300 p-2 text-center bg-yellow-50">
                       {formatNumber(data.baumeWithoutWater)}
                     </td>
                     <td className="border border-gray-300 p-2 text-center bg-yellow-50">
                       {formatNumber(data.baumeChange)}
-                    </td>
-                    <td className="border border-gray-300 p-2 text-center bg-purple-50">
-                      {formatNumber(data.bmdWithoutWater)}
-                    </td>
-                    <td className="border border-gray-300 p-2 text-center bg-purple-50">
-                      {formatNumber(data.bmdChange)}
                     </td>
                     <td className="border border-gray-300 p-2 text-center">
                       {(() => {
