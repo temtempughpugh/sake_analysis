@@ -5,7 +5,8 @@ import DataTable from './components/DataTable';
 import TankGraph from './components/TankGraph';
 import ProgressModeling from './components/ProgressModeling';
 import PredictionModeling from './components/PredictionModeling';
-import TemperatureAnalysis from './components/TemperatureAnalysis'; // 新規追加
+import TemperatureAnalysis from './components/TemperatureAnalysis';
+import OisuiAnalysis from './components/OisuiAnalysis'; // 新規追加
 
 const ErrorBoundary = ({ children }) => {
   const [hasError, setHasError] = useState(false);
@@ -62,7 +63,8 @@ function App() {
   const [showGraphs, setShowGraphs] = useState(false);
   const [showModeling, setShowModeling] = useState(false);
   const [showPrediction, setShowPrediction] = useState(false);
-  const [showTemperatureAnalysis, setShowTemperatureAnalysis] = useState(false); // 新規追加
+  const [showTemperatureAnalysis, setShowTemperatureAnalysis] = useState(false);
+  const [showOisuiAnalysis, setShowOisuiAnalysis] = useState(false); // 新規追加
   const [showMetadata, setShowMetadata] = useState(false);
   const [showMetadataComparison, setShowMetadataComparison] = useState(false);
 
@@ -92,7 +94,8 @@ function App() {
         setShowGraphs(false);
         setShowModeling(false);
         setShowPrediction(false);
-        setShowTemperatureAnalysis(false); // 新規追加
+        setShowTemperatureAnalysis(false);
+        setShowOisuiAnalysis(false); // 新規追加
       }
       setIsLoading(false);
     });
@@ -104,36 +107,49 @@ function App() {
     setShowGraphs(false);
     setShowModeling(false);
     setShowPrediction(false);
-    setShowTemperatureAnalysis(false); // 新規追加
+    setShowTemperatureAnalysis(false);
+    setShowOisuiAnalysis(false); // 新規追加
   };
 
   const handleAnalyze = () => {
     setShowGraphs(true);
     setShowModeling(false);
     setShowPrediction(false);
-    setShowTemperatureAnalysis(false); // 新規追加
+    setShowTemperatureAnalysis(false);
+    setShowOisuiAnalysis(false); // 新規追加
   };
 
   const handleModelingAnalyze = () => {
     setShowModeling(true);
     setShowGraphs(false);
     setShowPrediction(false);
-    setShowTemperatureAnalysis(false); // 新規追加
+    setShowTemperatureAnalysis(false);
+    setShowOisuiAnalysis(false); // 新規追加
   };
 
   const handlePredictionAnalyze = () => {
     setShowPrediction(true);
     setShowGraphs(false);
     setShowModeling(false);
-    setShowTemperatureAnalysis(false); // 新規追加
+    setShowTemperatureAnalysis(false);
+    setShowOisuiAnalysis(false); // 新規追加
   };
 
-  // 品温分析ボタン処理（新規追加）
   const handleTemperatureAnalyze = () => {
     setShowTemperatureAnalysis(true);
     setShowGraphs(false);
     setShowModeling(false);
     setShowPrediction(false);
+    setShowOisuiAnalysis(false); // 新規追加
+  };
+
+  // 追い水分析ボタン処理（新規追加）
+  const handleOisuiAnalyze = () => {
+    setShowOisuiAnalysis(true);
+    setShowGraphs(false);
+    setShowModeling(false);
+    setShowPrediction(false);
+    setShowTemperatureAnalysis(false);
   };
 
   // 真のアルコール係数計算関数
@@ -243,166 +259,148 @@ function App() {
         return days.length > 0 ? Math.max(...days) : null;
       };
 
-      const columns = [
-        { key: '順号', label: '順号', fixed: true, isNumeric: false },
-        { key: '仕込み規模', label: '仕込み規模', fixed: true, isNumeric: true },
-        { key: '酵母', label: '酵母', fixed: true, isNumeric: false },
-        { key: '酒質設計', label: '酒質設計', fixed: true, isNumeric: false },
-        { key: '特定名称', label: '特定名称', fixed: false, isNumeric: false },
-        { key: '仕込み総量', label: '仕込み総量', fixed: false, isNumeric: true },
-        { key: '5日までの積算品温', label: '5日積算品温', fixed: false, isNumeric: true },
-        { key: '最高ボーメ', label: '最高ボーメ', fixed: false, isNumeric: true },
-        { key: 'AB開始ボーメ', label: 'AB開始ボーメ', fixed: false, isNumeric: true },
-        { key: 'AB開始アルコール', label: 'AB開始アルコール', fixed: false, isNumeric: true },
-        { key: '最終ボーメ', label: '最終ボーメ', fixed: false, isNumeric: true },
-        { key: '最終アルコール度数', label: '最終アルコール', fixed: false, isNumeric: true },
-        { key: '最高BMD', label: '最高BMD', fixed: false, isNumeric: true },
-        { key: '最高BMD日数', label: '最高BMD日数', fixed: false, isNumeric: true },
-        { key: '追い水総量', label: '追い水総量', fixed: false, isNumeric: true },
-        { key: '追い水歩合', label: '追い水歩合', fixed: false, isNumeric: true },
-        { key: '後半追い水量', label: '後半追い水量', fixed: false, isNumeric: true },
-        { key: '後半追い水割合', label: '後半追い水割合', fixed: false, isNumeric: true },
-        { key: '醪日数', label: '醪日数', fixed: false, isNumeric: true },
-        { key: 'true_alcohol_coeff_with_water', label: '真のアルコール係数①', fixed: false, isNumeric: true },
-        { key: 'true_alcohol_coeff_without_water', label: '真のアルコール係数②', fixed: false, isNumeric: true }
+      const tankRows = selectedTanks.map(tank => {
+        const coeff = calculateTrueCoefficientsFromMeta(tank);
+        const moromiDays = calculateMoromiDays(tank);
+        
+        return {
+          tankId: tank.tankId,
+          metadata: tank.metadata,
+          coefficientWithWater: coeff.withWater,
+          coefficientWithoutWater: coeff.withoutWater,
+          moromiDays
+        };
+      });
+
+      const metadataFields = [
+        '順号', '仕込み規模', '酵母', '酒質設計', '特定名称',
+        '5日までの積算品温', '最高ボーメ', 'AB開始ボーメ', 'AB開始アルコール',
+        '最終ボーメ', '最終アルコール度数', '最高BMD', '最高BMD日数',
+        '追い水総量', '追い水歩合', '後半追い水量', '後半追い水割合'
       ];
 
-      const metrics = [
-        { key: '仕込み規模', label: '仕込み規模' },
-        { key: '仕込み総量', label: '仕込み総量' },
-        { key: '最高ボーメ', label: '最高ボーメ' },
-        { key: '最終ボーメ', label: '最終ボーメ' },
-        { key: '最終アルコール度数', label: '最終アルコール度数' },
-        { key: '最高BMD', label: '最高BMD' },
-        { key: '追い水総量', label: '追い水総量' },
-        { key: 'true_alcohol_coeff_with_water', label: '真のアルコール係数①' },
-        { key: 'true_alcohol_coeff_without_water', label: '真のアルコール係数②' }
-      ];
-
-      const dailyMetrics = [
-        '品温1回目', '1日の品温の変動', 'ボーメ（補完）', 'アルコール（補完）', 
-        'BMD（補完）', '追水'
-      ];
-
-      const metaStats = columns.reduce((acc, col) => {
-        if (col.isNumeric) {
-          let values;
-          
-          if (col.key === 'true_alcohol_coeff_with_water') {
-            values = selectedTanks
-              .map(tank => {
-                const result = calculateTrueCoefficientsFromMeta(tank);
-                return result.withWater;
-              })
-              .filter(v => v !== null && v !== undefined && !isNaN(v));
-          } else if (col.key === 'true_alcohol_coeff_without_water') {
-            values = selectedTanks
-              .map(tank => {
-                const result = calculateTrueCoefficientsFromMeta(tank);
-                return result.withoutWater;
-              })
-              .filter(v => v !== null && v !== undefined && !isNaN(v));
-          } else {
-            values = selectedTanks
-              .map(tank => tank.metadata[col.key])
-              .filter(v => v !== null && v !== undefined);
-          }
-          
-          acc[col.key] = {
-            avg: values.length ? (values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2) : '-',
-            max: values.length ? Math.max(...values).toFixed(2) : '-',
-            min: values.length ? Math.min(...values).toFixed(2) : '-',
-          };
-        }
-        return acc;
-      }, {});
-      
-      const dailyStats = dailyMetrics.reduce((acc, metric) => {
-        const values = selectedTanks.flatMap(tank => {
-          if (!tank.dailyData) return [];
-          return Object.values(tank.dailyData)
-            .map(data => data[metric])
-            .filter(v => v !== null && v !== undefined);
-        });
-        acc[metric] = {
-          avg: values.length ? (values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2) : '-',
+      const calculateStats = (data, key) => {
+        const values = data.map(d => parseFloat(d.metadata[key])).filter(v => !isNaN(v));
+        return {
+          avg: values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(2) : '-',
           max: values.length ? Math.max(...values).toFixed(2) : '-',
           min: values.length ? Math.min(...values).toFixed(2) : '-',
         };
-        return acc;
-      }, {});
+      };
 
       return (
-        <div className="p-4">
-          <h3 className="text-lg font-semibold mb-4">
-            選択タンク比較 ({selectedTanks.length}個のタンク)
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-6 mt-6">
+          <h3 className="text-lg font-semibold text-gray-700 mb-4 flex items-center">
+            🔍 メタデータ比較表 (選択: {selectedTanks.length}タンク)
           </h3>
           
           <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
+            <table className="w-full text-sm border-collapse border border-gray-300">
               <thead className="bg-gray-100">
                 <tr>
                   <th className="border border-gray-300 p-2">項目</th>
-                  <th className="border border-gray-300 p-2">平均</th>
-                  <th className="border border-gray-300 p-2">最大</th>
-                  <th className="border border-gray-300 p-2">最小</th>
+                  {tankRows.map(tank => (
+                    <th key={tank.tankId} className="border border-gray-300 p-2">
+                      タンク{tank.tankId}
+                    </th>
+                  ))}
+                  <th className="border border-gray-300 p-2 bg-blue-50">平均</th>
+                  <th className="border border-gray-300 p-2 bg-green-50">最大</th>
+                  <th className="border border-gray-300 p-2 bg-red-50">最小</th>
                 </tr>
               </thead>
               <tbody>
-                {metrics.map(metric => {
-                  const stats = metaStats[metric.key];
+                {metadataFields.map(field => {
+                  const stats = calculateStats(tankRows, field);
                   return (
-                    <tr key={metric.key} className="hover:bg-gray-50">
-                      <td className="border border-gray-300 p-2 font-medium">
-                        {metric.label}
-                      </td>
+                    <tr key={field} className="hover:bg-gray-50">
+                      <td className="border border-gray-300 p-2 font-medium">{field}</td>
+                      {tankRows.map(tank => (
+                        <td key={tank.tankId} className="border border-gray-300 p-2 text-center">
+                          {tank.metadata[field] || '-'}
+                        </td>
+                      ))}
                       <td className="border border-gray-300 p-2 text-center bg-blue-50">
-                        {stats ? stats.avg : '-'}
+                        {stats.avg}
                       </td>
                       <td className="border border-gray-300 p-2 text-center bg-green-50">
-                        {stats ? stats.max : '-'}
+                        {stats.max}
                       </td>
                       <td className="border border-gray-300 p-2 text-center bg-red-50">
-                        {stats ? stats.min : '-'}
+                        {stats.min}
                       </td>
                     </tr>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-          
-          <h3 className="text-lg font-semibold mt-4 mb-2">選択タンクの比較（日次データ）</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="border border-gray-300 p-2">項目</th>
-                  <th className="border border-gray-300 p-2">平均</th>
-                  <th className="border border-gray-300 p-2">最大</th>
-                  <th className="border border-gray-300 p-2">最小</th>
+                
+                {/* 醪日数行を追加 */}
+                <tr className="hover:bg-gray-50">
+                  <td className="border border-gray-300 p-2 font-medium">醪日数</td>
+                  {tankRows.map(tank => (
+                    <td key={tank.tankId} className="border border-gray-300 p-2 text-center">
+                      {tank.moromiDays || '-'}
+                    </td>
+                  ))}
+                  <td className="border border-gray-300 p-2 text-center bg-blue-50">
+                    {tankRows.filter(t => t.moromiDays).length > 0 ? 
+                      (tankRows.filter(t => t.moromiDays).reduce((sum, t) => sum + t.moromiDays, 0) / 
+                       tankRows.filter(t => t.moromiDays).length).toFixed(1) : '-'}
+                  </td>
+                  <td className="border border-gray-300 p-2 text-center bg-green-50">
+                    {tankRows.filter(t => t.moromiDays).length > 0 ? 
+                      Math.max(...tankRows.filter(t => t.moromiDays).map(t => t.moromiDays)) : '-'}
+                  </td>
+                  <td className="border border-gray-300 p-2 text-center bg-red-50">
+                    {tankRows.filter(t => t.moromiDays).length > 0 ? 
+                      Math.min(...tankRows.filter(t => t.moromiDays).map(t => t.moromiDays)) : '-'}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {dailyMetrics.map(metric => {
-                  const stats = dailyStats[metric];
-                  return (
-                    <tr key={metric} className="hover:bg-gray-50">
-                      <td className="border border-gray-300 p-2 font-medium">
-                        {metric}
-                      </td>
-                      <td className="border border-gray-300 p-2 text-center bg-blue-50">
-                        {stats ? stats.avg : '-'}
-                      </td>
-                      <td className="border border-gray-300 p-2 text-center bg-green-50">
-                        {stats ? stats.max : '-'}
-                      </td>
-                      <td className="border border-gray-300 p-2 text-center bg-red-50">
-                        {stats ? stats.min : '-'}
-                      </td>
-                    </tr>
-                  );
-                })}
+                
+                {/* 真のアルコール係数（追い水反映）行を追加 */}
+                <tr className="hover:bg-gray-50 bg-yellow-50">
+                  <td className="border border-gray-300 p-2 font-medium">真のアルコール係数（追い水反映）</td>
+                  {tankRows.map(tank => (
+                    <td key={tank.tankId} className="border border-gray-300 p-2 text-center">
+                      {tank.coefficientWithWater ? tank.coefficientWithWater.toFixed(3) : '-'}
+                    </td>
+                  ))}
+                  <td className="border border-gray-300 p-2 text-center bg-blue-50">
+                    {tankRows.filter(t => t.coefficientWithWater).length > 0 ? 
+                      (tankRows.filter(t => t.coefficientWithWater).reduce((sum, t) => sum + t.coefficientWithWater, 0) / 
+                       tankRows.filter(t => t.coefficientWithWater).length).toFixed(3) : '-'}
+                  </td>
+                  <td className="border border-gray-300 p-2 text-center bg-green-50">
+                    {tankRows.filter(t => t.coefficientWithWater).length > 0 ? 
+                      Math.max(...tankRows.filter(t => t.coefficientWithWater).map(t => t.coefficientWithWater)).toFixed(3) : '-'}
+                  </td>
+                  <td className="border border-gray-300 p-2 text-center bg-red-50">
+                    {tankRows.filter(t => t.coefficientWithWater).length > 0 ? 
+                      Math.min(...tankRows.filter(t => t.coefficientWithWater).map(t => t.coefficientWithWater)).toFixed(3) : '-'}
+                  </td>
+                </tr>
+                
+                {/* 真のアルコール係数（追い水無視）行を追加 */}
+                <tr className="hover:bg-gray-50 bg-orange-50">
+                  <td className="border border-gray-300 p-2 font-medium">真のアルコール係数（追い水無視）</td>
+                  {tankRows.map(tank => (
+                    <td key={tank.tankId} className="border border-gray-300 p-2 text-center">
+                      {tank.coefficientWithoutWater ? tank.coefficientWithoutWater.toFixed(3) : '-'}
+                    </td>
+                  ))}
+                  <td className="border border-gray-300 p-2 text-center bg-blue-50">
+                    {tankRows.filter(t => t.coefficientWithoutWater).length > 0 ? 
+                      (tankRows.filter(t => t.coefficientWithoutWater).reduce((sum, t) => sum + t.coefficientWithoutWater, 0) / 
+                       tankRows.filter(t => t.coefficientWithoutWater).length).toFixed(3) : '-'}
+                  </td>
+                  <td className="border border-gray-300 p-2 text-center bg-green-50">
+                    {tankRows.filter(t => t.coefficientWithoutWater).length > 0 ? 
+                      Math.max(...tankRows.filter(t => t.coefficientWithoutWater).map(t => t.coefficientWithoutWater)).toFixed(3) : '-'}
+                  </td>
+                  <td className="border border-gray-300 p-2 text-center bg-red-50">
+                    {tankRows.filter(t => t.coefficientWithoutWater).length > 0 ? 
+                      Math.min(...tankRows.filter(t => t.coefficientWithoutWater).map(t => t.coefficientWithoutWater)).toFixed(3) : '-'}
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -513,7 +511,6 @@ function App() {
                     モデリング予測
                   </button>
 
-                  {/* 新規追加：品温分析ボタン */}
                   <button
                     onClick={handleTemperatureAnalyze}
                     disabled={selectedTankIds.length === 0}
@@ -525,61 +522,37 @@ function App() {
                   >
                     品温分析 ({selectedTankIds.length}個のタンクを選択中)
                   </button>
+
+                  {/* 新規追加：追い水分析ボタン */}
+                  <button
+                    onClick={handleOisuiAnalyze}
+                    disabled={selectedTankIds.length === 0}
+                    className={`px-4 py-2 rounded text-white ${
+                      selectedTankIds.length === 0 
+                        ? 'bg-gray-400 cursor-not-allowed' 
+                        : 'bg-cyan-600 hover:bg-cyan-700'
+                    }`}
+                  >
+                    追い水分析 ({selectedTankIds.length}個のタンクを選択中)
+                  </button>
                 </div>
               </div>
 
-              {/* 4. メタデータ一覧（折りたたみ式 - デフォルト非表示） */}
-              <div className="bg-white rounded-lg shadow border border-gray-200 mb-6">
-                <button
-                  onClick={() => setShowMetadata(!showMetadata)}
-                  className="w-full px-6 py-4 text-left flex items-center justify-between hover:bg-gray-50"
-                >
-                  <div className="flex items-center">
-                    <Database className="w-5 h-5 mr-3 text-gray-600" />
-                    <span className="font-semibold">メタデータ一覧表</span>
-                    <span className="ml-2 text-sm text-gray-500">
-                      （選択済みタンクを上部に表示）
-                    </span>
-                  </div>
-                  {showMetadata ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                </button>
-                
-                {showMetadata && (
-                <ErrorBoundary>
-                  <DataTable 
-                    tanks={tanks} 
-                    onSelectionChange={handleSelectionChange} 
-                    selectedTankIds={selectedTankIds}
-                  />
-                </ErrorBoundary>
-              )}
-              </div>
+              {/* 4. データテーブル */}
+              <DataTable 
+                tanks={tanks} 
+                selectedTankIds={selectedTankIds}
+                onSelectionChange={handleSelectionChange}
+                showMetadata={showMetadata}
+                setShowMetadata={setShowMetadata}
+                showMetadataComparison={showMetadataComparison}
+                setShowMetadataComparison={setShowMetadataComparison}
+              />
 
-              {/* 5. メタデータ比較表（折りたたみ式） */}
-              <div className="bg-white rounded-lg shadow border border-gray-200 mb-6">
-                <button
-                  onClick={() => setShowMetadataComparison(!showMetadataComparison)}
-                  className="w-full px-6 py-4 text-left flex items-center justify-between hover:bg-gray-50"
-                >
-                  <div className="flex items-center">
-                    <Database className="w-5 h-5 mr-3 text-gray-600" />
-                    <span className="font-semibold">メタデータ比較表</span>
-                    <span className="ml-2 text-sm text-gray-500">
-                      （選択済みタンクの比較）
-                    </span>
-                  </div>
-                  {showMetadataComparison ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                </button>
-                
-                {showMetadataComparison && (
-                  <ErrorBoundary>
-                    <MetadataComparison 
-                      tanks={tanks} 
-                      selectedTankIds={selectedTankIds}
-                    />
-                  </ErrorBoundary>
-                )}
-              </div>
+              {/* 5. メタデータ比較表 */}
+              {showMetadataComparison && (
+                <MetadataComparison tanks={tanks} selectedTankIds={selectedTankIds} />
+              )}
 
               {/* 6. グラフ分析結果 */}
               {showGraphs && (
@@ -602,10 +575,17 @@ function App() {
                 </ErrorBoundary>
               )}
 
-              {/* 9. 品温分析結果（新規追加） */}
+              {/* 9. 品温分析結果 */}
               {showTemperatureAnalysis && (
                 <ErrorBoundary>
                   <TemperatureAnalysis tanks={tanks} selectedTankIds={selectedTankIds} />
+                </ErrorBoundary>
+              )}
+
+              {/* 10. 追い水分析結果（新規追加） */}
+              {showOisuiAnalysis && (
+                <ErrorBoundary>
+                  <OisuiAnalysis tanks={tanks} selectedTankIds={selectedTankIds} />
                 </ErrorBoundary>
               )}
             </>
