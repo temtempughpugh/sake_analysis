@@ -1,67 +1,152 @@
 import React, { useState, useEffect } from 'react';
 import { Line, Scatter } from 'react-chartjs-2';
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend } from 'chart.js';
-import 'chartjs-plugin-zoom';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  BarElement,
+} from 'chart.js';
+import zoomPlugin from 'chartjs-plugin-zoom';
 import { COLUMN_NAMES } from '../utils/csvParser';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend);
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  BarElement,
+  zoomPlugin
+);
 
 const colorPalette = [
-  '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
-  '#F7DC6F', '#BB8FCE', '#85C1E2', '#FF99CC', '#66CCCC',
+  'rgba(255, 99, 132, 1)',
+  'rgba(54, 162, 235, 1)',
+  'rgba(255, 205, 86, 1)',
+  'rgba(75, 192, 192, 1)',
+  'rgba(153, 102, 255, 1)',
+  'rgba(255, 159, 64, 1)',
+  'rgba(199, 199, 199, 1)',
+  'rgba(83, 102, 255, 1)',
+  'rgba(255, 99, 255, 1)',
+  'rgba(99, 255, 132, 1)',
 ];
 
-// 真のアルコール係数計算関数（alcohol_coeffグラフ専用）
-const calculateTrueCoefficients = (tank) => {
-  const results = [];
-  const totalVolume = parseFloat(tank.metadata[COLUMN_NAMES.META.TOTAL_VOLUME]) || 3000;
+// アルコール分を比重に換算する関数
+const alcoholToSpecificGravity = (alcoholDegree) => {
+  const alcoholTable = [
+    [0, 1.00000], [1, 0.99848], [2, 0.99701], [3, 0.99558], [4, 0.99419],
+    [5, 0.99284], [6, 0.99153], [7, 0.99025], [8, 0.98901], [9, 0.98780],
+    [10, 0.98662], [11, 0.98547], [12, 0.98435], [13, 0.98324], [14, 0.98217],
+    [15, 0.98112], [16, 0.98008], [17, 0.97906], [18, 0.97805], [19, 0.97704],
+    [20, 0.97605], [21, 0.97505], [22, 0.97405], [23, 0.97304], [24, 0.97201],
+    [25, 0.97098], [26, 0.96994], [27, 0.96887], [28, 0.96778], [29, 0.96666],
+    [30, 0.96552], [31, 0.96434], [32, 0.96313], [33, 0.96189], [34, 0.96060],
+    [35, 0.95928], [36, 0.95792], [37, 0.95652], [38, 0.95508], [39, 0.95359],
+    [40, 0.95207], [41, 0.95050], [42, 0.94888], [43, 0.94723], [44, 0.94554],
+    [45, 0.94381], [46, 0.94205], [47, 0.94024], [48, 0.93839], [49, 0.93651],
+    [50, 0.93459]
+  ];
   
-  const dailyEntries = Object.entries(tank.dailyData || {})
+  if (alcoholDegree < 0) return 1.00000;
+  if (alcoholDegree > 50) return 0.93459;
+  
+  const intDegree = Math.floor(alcoholDegree);
+  if (alcoholDegree === intDegree && intDegree <= 50) {
+    return alcoholTable[intDegree][1];
+  }
+  
+  if (intDegree >= 50) return 0.93459;
+  
+  const lowerValue = alcoholTable[intDegree][1];
+  const upperValue = alcoholTable[intDegree + 1][1];
+  const fraction = alcoholDegree - intDegree;
+  
+  return lowerValue + (upperValue - lowerValue) * fraction;
+};
+
+// エキス分計算関数
+const calculateExtractContent = (finalBaume, finalAlcohol) => {
+  if (isNaN(finalBaume) || isNaN(finalAlcohol)) {
+    return null;
+  }
+  
+  const nihonshuDo = -10 * finalBaume;
+  const S = 1443 / (1443 + nihonshuDo);
+  const A = alcoholToSpecificGravity(finalAlcohol);
+  const extractContent = (S - A) * 260 + 0.21;
+  
+  return parseFloat(extractContent.toFixed(2));
+};
+
+// 原エキス分計算関数
+const calculateOriginalExtractContent = (extractContent, finalAlcohol) => {
+  if (extractContent === null || isNaN(finalAlcohol)) {
+    return null;
+  }
+  
+  const originalExtractContent = extractContent + (finalAlcohol * 1.5894);
+  
+  return parseFloat(originalExtractContent.toFixed(2));
+};
+
+const calculateTrueAlcoholCoefficient = (tank) => {
+  if (!tank || !tank.dailyData) return [];
+  
+  const dailyEntries = Object.entries(tank.dailyData)
+    .filter(([day, data]) => {
+      const dayNum = parseInt(day);
+      return !isNaN(dayNum) && data && 
+             data[COLUMN_NAMES.DAILY.BAUME_BMD_DAY] !== null && 
+             data[COLUMN_NAMES.DAILY.ALCOHOL] !== null;
+    })
     .map(([day, data]) => ({
       day: parseInt(day),
-      baume: parseFloat(data[COLUMN_NAMES.DAILY.BAUME_ESTIMATED]) || null,
-      alcohol: parseFloat(data[COLUMN_NAMES.DAILY.ALCOHOL_ESTIMATED]) || null,
-      addedWater: parseFloat(data[COLUMN_NAMES.DAILY.WATER]) || 0
+      baume: parseFloat(data[COLUMN_NAMES.DAILY.BAUME_BMD_DAY]),
+      alcohol: parseFloat(data[COLUMN_NAMES.DAILY.ALCOHOL]),
+      water: parseFloat(data[COLUMN_NAMES.DAILY.WATER]) || 0
     }))
-    .filter(entry => entry.baume !== null && entry.alcohol !== null)
     .sort((a, b) => a.day - b.day);
 
-  if (dailyEntries.length === 0) return [];
+  if (dailyEntries.length < 2) return [];
 
-  const baseDay = dailyEntries[0];
-  let totalCumulativeWater = 0;
-  Object.entries(tank.dailyData || {}).forEach(([day, data]) => {
-    const dayNum = parseInt(day);
-    const waterAmount = parseFloat(data[COLUMN_NAMES.DAILY.WATER]) || 0;
-    if (dayNum <= baseDay.day && waterAmount > 0) {
-      totalCumulativeWater += waterAmount;
-    }
-  });
-  
+  const results = [];
+  const metadata = tank.metadata || {};
+  const totalVolume = parseFloat(metadata[COLUMN_NAMES.META.TOTAL_VOLUME]) || 0;
+  const startBaume = parseFloat(metadata[COLUMN_NAMES.META.AB_START_BAUME]) || dailyEntries[0].baume;
+  const startAlcohol = parseFloat(metadata[COLUMN_NAMES.META.AB_START_ALCOHOL]) || dailyEntries[0].alcohol;
+
   dailyEntries.forEach((dayData, index) => {
-    let cumulativeWater = totalCumulativeWater;
-    if (index > 0) {
-      for (let i = 1; i < index; i++) {
-        cumulativeWater += dailyEntries[i].addedWater;
-      }
+    if (index === 0) {
+      results.push({
+        day: dayData.day,
+        withWater: { coefficient: null },
+        withoutWater: { coefficient: null }
+      });
+      return;
     }
-    
-    const dilutionFactor = (totalVolume + cumulativeWater) / totalVolume;
-    const trueBaumeWithWater = dayData.baume * dilutionFactor;
-    const trueAlcoholWithWater = dayData.alcohol * dilutionFactor;
+
+    const totalWaterUpToDay = dailyEntries.slice(0, index + 1).reduce((sum, d) => sum + d.water, 0);
     
     let coefficientWithWater = null;
     let coefficientWithoutWater = null;
     
-    if (index > 0) {
-      const baseDilutionFactor = (totalVolume + totalCumulativeWater) / totalVolume;
-      const baseBaumeWithWater = baseDay.baume * baseDilutionFactor;
-      const baseAlcoholWithWater = baseDay.alcohol * baseDilutionFactor;
+    if (totalVolume > 0) {
+      const dilutionFactor = (totalVolume + totalWaterUpToDay) / totalVolume;
+      const trueBaume = dayData.baume * dilutionFactor;
+      const trueAlcohol = dayData.alcohol * dilutionFactor;
       
-      const baumeChangeWithWater = baseBaumeWithWater - trueBaumeWithWater;
-      const alcoholChangeWithWater = trueAlcoholWithWater - baseAlcoholWithWater;
-      const baumeChangeWithoutWater = baseDay.baume - dayData.baume;
-      const alcoholChangeWithoutWater = dayData.alcohol - baseDay.alcohol;
+      const baumeChangeWithWater = startBaume - trueBaume;
+      const alcoholChangeWithWater = trueAlcohol - startAlcohol;
+      const baumeChangeWithoutWater = startBaume - dayData.baume;
+      const alcoholChangeWithoutWater = dayData.alcohol - startAlcohol;
       
       coefficientWithWater = baumeChangeWithWater > 0 ? alcoholChangeWithWater / baumeChangeWithWater : null;
       coefficientWithoutWater = baumeChangeWithoutWater > 0 ? alcoholChangeWithoutWater / baumeChangeWithoutWater : null;
@@ -77,7 +162,6 @@ const calculateTrueCoefficients = (tank) => {
   return results;
 };
 
-// 列定義をTankGraph内で定義
 const columns = [
   { key: COLUMN_NAMES.META.TANK_NUMBER, label: '順号', fixed: true, isNumeric: true },
   { key: COLUMN_NAMES.META.BATCH_SIZE, label: '仕込み規模', fixed: true, isNumeric: true },
@@ -108,14 +192,16 @@ const dailyMetrics = [
 ];
 
 const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
-  const [selectedGraphs, setSelectedGraphs] = useState(['temperature', 'baume', 'alcohol', 'bmd', 'ab', 'alcohol_coeff']);
+  const [selectedGraphs, setSelectedGraphs] = useState(['temperature', 'baume', 'alcohol', 'bmd', 'ab', 'alcohol_coeff', 'extract', 'original_extract']);
   const [graphPeriods, setGraphPeriods] = useState({
     temperature: { startDay: 5, endDay: 28 },
     baume: { startDay: 5, endDay: 28 },
     alcohol: { startDay: 9, endDay: 28 },
     bmd: { startDay: 5, endDay: 28 },
     ab: { startDay: 9, endDay: 28 },
-    alcohol_coeff: { startDay: 8, endDay: 28 }, // 元の設定維持
+    alcohol_coeff: { startDay: 8, endDay: 28 },
+    extract: { startDay: 8, endDay: 26 },
+    original_extract: { startDay: 8, endDay: 26 },
   });
   const [showOisui, setShowOisui] = useState({
     temperature: true,
@@ -123,6 +209,8 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
     alcohol: true,
     bmd: true,
     alcohol_coeff: true,
+    extract: true,
+    original_extract: true,
   });
   const [selectedTanksState, setSelectedTanksState] = useState([]);
   const [selectedTanksByGraph, setSelectedTanksByGraph] = useState({});
@@ -133,7 +221,6 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
       tanks.filter(tank => Array.isArray(selectedTankIds) && selectedTankIds.includes(tank.tankId)) : [];
     setSelectedTanksState(newSelectedTanks || []);
 
-    // 初期状態: すべてのタンクを各グラフで選択
     const initialSelection = {};
     selectedGraphs.forEach(graphId => {
       initialSelection[graphId] = {};
@@ -158,7 +245,9 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
     { id: 'alcohol', title: 'アルコール経過グラフ', yAxis: COLUMN_NAMES.DAILY.ALCOHOL_AFTER_WATER, yRange: { min: 5, max: 20 }, type: 'line' },
     { id: 'bmd', title: 'BMD経過グラフ', yAxis: COLUMN_NAMES.DAILY.BMD_COMPLEMENT, yRange: { min: -30, max: 50 }, type: 'line' },
     { id: 'ab', title: 'アルコール vs ボーメ', xAxis: COLUMN_NAMES.DAILY.ALCOHOL, yAxis: COLUMN_NAMES.DAILY.BAUME_BMD_DAY, yRange: { min: -2, max: 6 }, type: 'scatter' },
-    { id: 'alcohol_coeff', title: '真のアルコール係数推移グラフ', yAxis: 'true_alcohol_coeff', yRange: { min: 0, max: 2.5 }, type: 'line' }, // タイトルのみ変更
+    { id: 'alcohol_coeff', title: '真のアルコール係数推移グラフ', yAxis: 'true_alcohol_coeff', yRange: { min: 0, max: 2.5 }, type: 'line' },
+    { id: 'extract', title: 'エキス分経過グラフ', yAxis: 'extract_content', yRange: { min: 0, max: 15 }, type: 'line' },
+    { id: 'original_extract', title: '原エキス分経過グラフ', yAxis: 'original_extract_content', yRange: { min: 10, max: 40 }, type: 'line' },
   ];
 
   const getAvailableDays = (tank, graphId) => {
@@ -198,68 +287,11 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
       const availableDays = getAvailableDays(tank, graph.id);
       const isSelected = selectedTanksByGraph[graph.id]?.[tank.tankId] || false;
       
-      // alcohol_coeffグラフのみ真のアルコール係数を表示
-      if (graph.id === 'alcohol_coeff') {
-        const trueCoeffResults = calculateTrueCoefficients(tank);
-        if (trueCoeffResults.length === 0 || !isSelected) return;
-        
-        // ①追い水反映のデータ
-        const withWaterData = availableDays.map(day => {
-          const result = trueCoeffResults.find(r => r.day === day);
-          return result && result.withWater.coefficient !== null ? result.withWater.coefficient : null;
-        });
-        
-        // ②追い水無視のデータ
-        const withoutWaterData = availableDays.map(day => {
-          const result = trueCoeffResults.find(r => r.day === day);
-          return result && result.withoutWater.coefficient !== null ? result.withoutWater.coefficient : null;
-        });
-        
-        const baseColor = colorPalette[index % colorPalette.length];
-        const tankNumber = tank.metadata[COLUMN_NAMES.META.TANK_NUMBER] || index + 1;
-        const yeast = tank.metadata[COLUMN_NAMES.META.YEAST] || '-';
-        
-        // 追い水反映データセット
-        if (withWaterData.some(v => v !== null)) {
-          datasets.push({
-            label: `タンク${tankNumber}(${yeast}) ①追い水反映`,
-            data: withWaterData,
-            borderColor: baseColor,
-            backgroundColor: baseColor.replace('1)', '0.2)'),
-            borderWidth: 3,
-            fill: false,
-            tension: 0.3,
-            pointRadius: 4,
-            spanGaps: true,
-            borderDash: []
-          });
-        }
-        
-        // 追い水無視データセット
-        if (withoutWaterData.some(v => v !== null)) {
-          datasets.push({
-            label: `タンク${tankNumber}(${yeast}) ②追い水無視`,
-            data: withoutWaterData,
-            borderColor: baseColor,
-            backgroundColor: baseColor.replace('1)', '0.1)'),
-            borderWidth: 2,
-            fill: false,
-            tension: 0.3,
-            pointRadius: 3,
-            spanGaps: true,
-            borderDash: [5, 5]
-          });
-        }
-        
-        return;
-      }
-      
-      // 既存のグラフロジック（AB散布図）
-      if (graph.id === 'ab') {
+      if (graph.type === 'scatter') {
         const scatterData = availableDays.map(day => {
           const dayData = tank.dailyData[day];
-          return dayData && dayData[graph.xAxis] !== null && dayData[graph.yAxis] !== null
-            ? { x: parseFloat(dayData[graph.xAxis]), y: parseFloat(dayData[graph.yAxis]) }
+          return dayData && dayData[graph.xAxis] !== null && dayData[graph.yAxis] !== null ?
+            { x: parseFloat(dayData[graph.xAxis]), y: parseFloat(dayData[graph.yAxis]) }
             : null;
         }).filter(d => d !== null);
         if (scatterData.length > 0 && isSelected) {
@@ -288,8 +320,109 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
             hidden: !isSelected,
           });
         }
+      } else if (graph.id === 'alcohol_coeff') {
+        const coeffData = calculateTrueAlcoholCoefficient(tank);
+        const filteredCoeffData = coeffData
+          .filter(d => availableDays.includes(d.day))
+          .map(d => d.withWater.coefficient);
+        
+        // null を保持して日数と連動させる
+        const alignedCoeffData = availableDays.map(day => {
+          const coeffEntry = coeffData.find(d => d.day === day);
+          return coeffEntry && coeffEntry.withWater.coefficient !== null 
+            ? coeffEntry.withWater.coefficient 
+            : null;
+        });
+        
+        if (alignedCoeffData.some(v => v !== null) && isSelected) {
+          datasets.push({
+            label: `タンク ${tank.metadata[COLUMN_NAMES.META.TANK_NUMBER] || index + 1} (酵母: ${tank.metadata[COLUMN_NAMES.META.YEAST] || '-'})`,
+            data: alignedCoeffData,
+            borderColor: colorPalette[index % colorPalette.length],
+            backgroundColor: colorPalette[index % colorPalette.length].replace('1)', '0.2'),
+            borderWidth: 2.5,
+            fill: false,
+            spanGaps: true,
+            tension: 0,
+            pointRadius: 3,
+            hidden: !isSelected,
+          });
+        }
+        
+        const waterData = availableDays.map(day => {
+          const dayData = tank.dailyData[day];
+          const y = dayData ? parseFloat(dayData[COLUMN_NAMES.DAILY.WATER]) || 0 : 0;
+          return y > 0 ? { x: day, y } : null;
+        }).filter(d => d !== null);
+        
+        if (waterData.length > 0 && isSelected) {
+          datasets.push({
+            label: `追い水 ${tank.metadata[COLUMN_NAMES.META.TANK_NUMBER] || index + 1}`,
+            data: waterData,
+            type: 'bar',
+            yAxisID: 'y2',
+            backgroundColor: colorPalette[index % colorPalette.length].replace('1)', '0.5'),
+            hidden: !isSelected || !showOisui[graph.id],
+          });
+        }
+      } else if (graph.id === 'extract' || graph.id === 'original_extract') {
+        // エキス分・原エキス分のデータ計算
+        const extractData = availableDays.map(day => {
+          const dayData = tank.dailyData[day];
+          if (!dayData || 
+              dayData[COLUMN_NAMES.DAILY.BAUME_BMD_DAY] === null || 
+              dayData[COLUMN_NAMES.DAILY.ALCOHOL] === null) {
+            return null;
+          }
+          
+          const baume = parseFloat(dayData[COLUMN_NAMES.DAILY.BAUME_BMD_DAY]);
+          const alcohol = parseFloat(dayData[COLUMN_NAMES.DAILY.ALCOHOL]);
+          
+          if (isNaN(baume) || isNaN(alcohol)) {
+            return null;
+          }
+          
+          const extractContent = calculateExtractContent(baume, alcohol);
+          if (graph.id === 'extract') {
+            return extractContent;
+          } else {
+            return calculateOriginalExtractContent(extractContent, alcohol);
+          }
+        });
+        
+        if (extractData.length > 0 && isSelected) {
+          datasets.push({
+            label: `タンク ${tank.metadata[COLUMN_NAMES.META.TANK_NUMBER] || index + 1} (酵母: ${tank.metadata[COLUMN_NAMES.META.YEAST] || '-'})`,
+            data: extractData,
+            borderColor: colorPalette[index % colorPalette.length],
+            backgroundColor: colorPalette[index % colorPalette.length].replace('1)', '0.2'),
+            borderWidth: 2.5,
+            fill: false,
+            spanGaps: true,
+            tension: 0,
+            pointRadius: 3,
+            hidden: !isSelected,
+          });
+        }
+        
+        // 追い水表示
+        const waterData = availableDays.map(day => {
+          const dayData = tank.dailyData[day];
+          const y = dayData ? parseFloat(dayData[COLUMN_NAMES.DAILY.WATER]) || 0 : 0;
+          return y > 0 ? { x: day, y } : null;
+        }).filter(d => d !== null);
+        
+        if (waterData.length > 0 && isSelected) {
+          datasets.push({
+            label: `追い水 ${tank.metadata[COLUMN_NAMES.META.TANK_NUMBER] || index + 1}`,
+            data: waterData,
+            type: 'bar',
+            yAxisID: 'y2',
+            backgroundColor: colorPalette[index % colorPalette.length].replace('1)', '0.5'),
+            hidden: !isSelected || !showOisui[graph.id],
+          });
+        }
       } else {
-        // 既存の線グラフロジック（変更なし）
         const rawData = availableDays.map(day => {
           const dayData = tank.dailyData[day];
           return dayData && dayData[graph.yAxis] !== null ?
@@ -310,7 +443,6 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
           });
         }
         
-        // 既存の追い水表示ロジック（変更なし）
         const waterData = availableDays.map(day => {
           const dayData = tank.dailyData[day];
           const y = dayData ? parseFloat(dayData[COLUMN_NAMES.DAILY.WATER]) || 0 : 0;
@@ -429,7 +561,7 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
                     min={graphPeriods[graph.id]?.startDay || 2}
                   />
                 </div>
-                {['temperature', 'baume', 'alcohol', 'bmd', 'alcohol_coeff'].includes(graph.id) && (
+                {['temperature', 'baume', 'alcohol', 'bmd', 'alcohol_coeff', 'extract', 'original_extract'].includes(graph.id) && (
                   <div>
                     <label className="inline-flex items-center">
                       <input
@@ -459,7 +591,6 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
                     plugins: {
                       legend: { position: 'bottom' },
                       tooltip: { enabled: true },
-                      zoom: { pan: { enabled: true, mode: 'x' }, zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' } },
                     },
                   }}
                   id={graph.id}
@@ -477,6 +608,8 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
                         title: { 
                           display: true, 
                           text: graph.id === 'alcohol_coeff' ? '真のアルコール係数' : 
+                                graph.id === 'extract' ? 'エキス分' :
+                                graph.id === 'original_extract' ? '原エキス分' :
                                 graph.yAxis === COLUMN_NAMES.DAILY.TEMP_1 ? '品温 (°C)' : 
                                 graph.yAxis === COLUMN_NAMES.DAILY.BAUME_BMD_DAY ? 'ボーメ' : 
                                 graph.yAxis === COLUMN_NAMES.DAILY.ALCOHOL ? 'アルコール (%)' : 
@@ -493,7 +626,6 @@ const TankGraph = ({ tanks = [], selectedTankIds = [] }) => {
                     plugins: {
                       legend: { position: 'bottom' },
                       tooltip: { enabled: true },
-                      zoom: { pan: { enabled: true, mode: 'x' }, zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' } },
                     },
                   }}
                   id={graph.id}

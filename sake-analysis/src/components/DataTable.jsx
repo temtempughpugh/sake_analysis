@@ -401,10 +401,14 @@ const DataTable = ({ tanks, selectedTankIds, onSelectionChange }) => {
     setVisibleColumns(newVisibleColumns);
   };
 
-  // データ取得
+  // データ取得 - 選択済みタンクを上部に表示
   const filteredTanks = getFilteredTanks();
   const sortedTanks = multiSort(filteredTanks);
-  const filteredAndSortedTanks = sortedTanks;
+  
+  // 選択済みタンクを上部に、未選択タンクを下部に配置
+  const selectedTanks = sortedTanks.filter(tank => selectedTankIds.includes(tank.tankId));
+  const unselectedTanks = sortedTanks.filter(tank => !selectedTankIds.includes(tank.tankId));
+  const filteredAndSortedTanks = [...selectedTanks, ...unselectedTanks];
 
   // 表示するカラムを取得
   const displayColumns = columns.filter(col => visibleColumns.has(col.key));
