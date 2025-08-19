@@ -7,6 +7,7 @@ import ProgressModeling from './components/ProgressModeling';
 import PredictionModeling from './components/PredictionModeling';
 import TemperatureAnalysis from './components/TemperatureAnalysis';
 import OisuiAnalysis from './components/OisuiAnalysis'; // 新規追加
+import OisuiAnalysis2 from './components/OisuiAnalysis2';
 
 const ErrorBoundary = ({ children }) => {
   const [hasError, setHasError] = useState(false);
@@ -67,6 +68,7 @@ function App() {
   const [showOisuiAnalysis, setShowOisuiAnalysis] = useState(false); // 新規追加
   const [showMetadata, setShowMetadata] = useState(false);
   const [showMetadataComparison, setShowMetadataComparison] = useState(false);
+  const [showOisuiAnalysis2, setShowOisuiAnalysis2] = useState(false);
 
   // LocalStorageに保存
   useEffect(() => {
@@ -151,6 +153,15 @@ function App() {
     setShowPrediction(false);
     setShowTemperatureAnalysis(false);
   };
+
+  const handleOisuiAnalysis2 = () => {
+  setShowOisuiAnalysis2(true);
+  setShowGraphs(false);
+  setShowModeling(false);
+  setShowPrediction(false);
+  setShowTemperatureAnalysis(false);
+  setShowOisuiAnalysis(false);
+};
 
   // 真のアルコール係数計算関数
   const calculateTrueCoefficients = (tank) => {
@@ -535,6 +546,18 @@ function App() {
                   >
                     追い水分析 ({selectedTankIds.length}個のタンクを選択中)
                   </button>
+
+                  <button
+  onClick={handleOisuiAnalysis2}
+  disabled={selectedTankIds.length === 0}
+  className={`px-4 py-2 rounded text-white ${
+    selectedTankIds.length === 0 
+      ? 'bg-gray-400 cursor-not-allowed' 
+      : 'bg-teal-600 hover:bg-teal-700'
+  }`}
+>
+  追い水分析2 ({selectedTankIds.length}個のタンクを選択中)
+</button>
                 </div>
               </div>
 
@@ -588,6 +611,13 @@ function App() {
                   <OisuiAnalysis tanks={tanks} selectedTankIds={selectedTankIds} />
                 </ErrorBoundary>
               )}
+
+              {/* 11. 追い水分析2結果（新規追加） */}
+{showOisuiAnalysis2 && (
+  <ErrorBoundary>
+    <OisuiAnalysis2 tanks={tanks} selectedTankIds={selectedTankIds} />
+  </ErrorBoundary>
+)}
             </>
           )}
         </ErrorBoundary>
