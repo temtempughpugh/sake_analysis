@@ -1,9 +1,5 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, TrendingUp, Droplets, GitCompare, BarChart3 } from 'lucide-react';
-import ProgressPrediction from './ProgressPrediction';
-import WaterAnalysis from './WaterAnalysis';
-import ComparisonAnalysis from './ComparisonAnalysis';
-import IntegratedAnalysis from './IntegratedAnalysis';
 
 const AnalysisTables = ({ tank, allTanks }) => {
   const [expandedSections, setExpandedSections] = useState({
@@ -64,7 +60,9 @@ const AnalysisTables = ({ tank, allTanks }) => {
         
         {expandedSections.integrated && (
           <div className="p-4 border-t border-gray-200">
-            <IntegratedAnalysis currentTank={tank} allTanks={allTanks} />
+            <div className="text-center text-gray-500 py-8">
+              <p>統合分析機能は開発中です</p>
+            </div>
           </div>
         )}
       </div>
@@ -90,7 +88,9 @@ const AnalysisTables = ({ tank, allTanks }) => {
         
         {expandedSections.progress && (
           <div className="p-4 border-t border-gray-200">
-            <ProgressPrediction tank={tank} allTanks={allTanks} />
+            <div className="text-center text-gray-500 py-8">
+              <p>進捗予測分析機能は開発中です</p>
+            </div>
           </div>
         )}
       </div>
@@ -114,17 +114,11 @@ const AnalysisTables = ({ tank, allTanks }) => {
           }
         </button>
         
-        {expandedSections.water && currentDay >= 5 && (
+        {expandedSections.water && (
           <div className="p-4 border-t border-gray-200">
-            <WaterAnalysis tank={tank} currentDay={currentDay} />
-          </div>
-        )}
-        
-        {expandedSections.water && currentDay < 5 && (
-          <div className="p-4 border-t border-gray-200">
-            <p className="text-sm text-gray-500">
-              追い水分析は5日目以降のデータが必要です。
-            </p>
+            <div className="text-center text-gray-500 py-8">
+              <p>追い水分析機能は開発中です</p>
+            </div>
           </div>
         )}
       </div>
@@ -150,11 +144,9 @@ const AnalysisTables = ({ tank, allTanks }) => {
         
         {expandedSections.comparison && (
           <div className="p-4 border-t border-gray-200">
-            <ComparisonAnalysis 
-              currentTank={tank} 
-              allTanks={allTanks}
-              currentDay={currentDay}
-            />
+            <div className="text-center text-gray-500 py-8">
+              <p>比較分析機能は開発中です</p>
+            </div>
           </div>
         )}
       </div>
