@@ -77,6 +77,7 @@ function App() {
     return localStorage.getItem('appMode') || 'analysis';
   });
   
+  
   useEffect(() => {
     localStorage.setItem('tanks', JSON.stringify(tanks));
   }, [tanks]);
@@ -89,16 +90,52 @@ function App() {
     const file = event.target.files[0];
     if (!file) return;
     
+    // 既存のリアルタイムデータがある場合は確認
+    const hasRealTimeData = tanks.some(tank => 
+      tank.tankId.startsWith('tank_') && !tank.tankId.includes('csv')
+    );
+    
+    if (hasRealTimeData) {
+      const confirmed = window.confirm(
+        '既存のリアルタイムデータがあります。\n' +
+        'CSVデータをインポートしますか？\n\n' +
+        '「OK」: 既存データを保持してCSVデータを追加\n' +
+        '「キャンセル」: インポートを中止'
+      );
+      
+      if (!confirmed) {
+        event.target.value = ''; // ファイル選択をリセット
+        return;
+      }
+    }
+    
     parseCSV(file, (parsedTanks, error) => {
       if (error) {
         console.error('CSV parsing error:', error);
         alert('CSVファイルの解析に失敗しました: ' + error.message);
       } else if (parsedTanks) {
-        setTanks(parsedTanks);
+        // 既存のリアルタイムデータを保持
+        const realTimeTanks = tanks.filter(tank => 
+          tank.tankId.startsWith('tank_') && !tank.tankId.includes('csv')
+        );
+        
+        // CSVデータのtankIdを変更して重複を避ける
+        const csvTanks = parsedTanks.map(tank => ({
+          ...tank,
+          tankId: `csv_${tank.tankId}` // CSVデータであることを明示
+        }));
+        
+        // データをマージ
+        const mergedTanks = [...realTimeTanks, ...csvTanks];
+        setTanks(mergedTanks);
         setSelectedTankIds([]);
-        console.log('Parsed tanks:', parsedTanks);
+        
+        console.log('Merged tanks:', mergedTanks);
+        alert(`CSVデータを追加しました。\nリアルタイムデータ: ${realTimeTanks.length}件\nCSVデータ: ${csvTanks.length}件`);
       }
     });
+    
+    event.target.value = ''; // ファイル選択をリセット
   };
   
   const handleSelectionChange = (newSelectedIds) => {
@@ -140,6 +177,64 @@ function App() {
     closeOtherSections('integrated');
   };
   
+  // データのバックアップとリストア機能
+  const handleBackupData = () => {
+    const backup = {
+      tanks: tanks,
+      selectedTankIds: selectedTankIds,
+      appMode: appMode,
+      timestamp: new Date().toISOString(),
+      version: '1.0'
+    };
+    
+    const dataStr = JSON.stringify(backup, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+    
+    const exportFileDefaultName = `sake_data_backup_${new Date().toISOString().split('T')[0]}.json`;
+    
+    const linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', exportFileDefaultName);
+    linkElement.click();
+  };
+  
+  const handleRestoreData = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const backup = JSON.parse(e.target.result);
+        
+        if (backup.version !== '1.0') {
+          alert('バックアップファイルのバージョンが異なります。');
+          return;
+        }
+        
+        const confirmed = window.confirm(
+          `バックアップデータを復元しますか？\n\n` +
+          `バックアップ日時: ${new Date(backup.timestamp).toLocaleString()}\n` +
+          `タンク数: ${backup.tanks?.length || 0}\n\n` +
+          `現在のデータは失われます。`
+        );
+        
+        if (confirmed) {
+          setTanks(backup.tanks || []);
+          setSelectedTankIds(backup.selectedTankIds || []);
+          setAppMode(backup.appMode || 'analysis');
+          localStorage.setItem('appMode', backup.appMode || 'analysis');
+          alert('データを復元しました。');
+        }
+      } catch (error) {
+        console.error('Restore error:', error);
+        alert('バックアップファイルの読み込みに失敗しました。');
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  };
+
   const closeOtherSections = (except = '') => {
     if (except !== 'graphs') setShowGraphs(false);
     if (except !== 'modeling') setShowModeling(false);
@@ -150,13 +245,18 @@ function App() {
     if (except !== 'integrated') setShowIntegratedModeling(false);
   };
 
-  // 新規追加: モード切り替え時の処理
-  const handleModeChange = (mode) => {
-    setAppMode(mode);
-    localStorage.setItem('appMode', mode);
-    // モード切り替え時に選択をリセット
+const handleModeChange = (newMode) => {
+    // モードが変わってもデータは保持される
+    setAppMode(newMode);
+    localStorage.setItem('appMode', newMode);
+    
+    // 選択状態をクリア
     setSelectedTankIds([]);
-    closeOtherSections();
+    
+    // 分析系の表示を全て閉じる
+    closeAllSections();
+    
+    // 既存の他の処理があればここに追加
   };
   
   const hasData = tanks.length > 0;
@@ -365,7 +465,26 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-100">
       <div className="container mx-auto px-4 py-8 max-w-7xl">
-        <h1 className="text-3xl font-bold text-center mb-8">日本酒醸造データ分析システム</h1>
+       <h1 className="text-3xl font-bold text-center mb-8">日本酒醸造データ分析システム</h1>
+        
+        {/* データ管理ボタン */}
+        <div className="flex justify-center mb-4 space-x-2">
+          <button
+            onClick={handleBackupData}
+            className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm"
+          >
+            データバックアップ
+          </button>
+          <label className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm cursor-pointer">
+            データ復元
+            <input
+              type="file"
+              accept=".json"
+              onChange={handleRestoreData}
+              className="hidden"
+            />
+          </label>
+        </div>
         
         {/* モード切り替えボタン - 新規追加 */}
         <div className="flex justify-center mb-6">
