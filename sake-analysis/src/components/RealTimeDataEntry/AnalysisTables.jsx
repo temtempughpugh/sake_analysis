@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, TrendingUp, Droplets, GitCompare, BarChart3 } from 'lucide-react';
+import IntegratedAnalysis from './IntegratedAnalysis';
 
 const AnalysisTables = ({ tank, allTanks }) => {
   const [expandedSections, setExpandedSections] = useState({
@@ -59,10 +60,8 @@ const AnalysisTables = ({ tank, allTanks }) => {
         </button>
         
         {expandedSections.integrated && (
-          <div className="p-4 border-t border-gray-200">
-            <div className="text-center text-gray-500 py-8">
-              <p>統合分析機能は開発中です</p>
-            </div>
+          <div className="border-t border-gray-200">
+            <IntegratedAnalysis currentTank={tank} tanks={allTanks} />
           </div>
         )}
       </div>
@@ -89,13 +88,13 @@ const AnalysisTables = ({ tank, allTanks }) => {
         {expandedSections.progress && (
           <div className="p-4 border-t border-gray-200">
             <div className="text-center text-gray-500 py-8">
-              <p>進捗予測分析機能は開発中です</p>
+              <p>進捗予測機能は開発中です</p>
             </div>
           </div>
         )}
       </div>
 
-      {/* 追い水分析表 */}
+      {/* 追い水分析 */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <button
           onClick={() => toggleSection('water')}
@@ -105,7 +104,7 @@ const AnalysisTables = ({ tank, allTanks }) => {
             <Droplets className="w-5 h-5 text-cyan-600" />
             <h3 className="text-lg font-semibold">追い水分析</h3>
             <span className="text-sm text-gray-500">
-              {currentDay >= 5 ? (currentDay >= 8 ? '（8日目以降）' : '（5-7日目）') : '（5日目以降で利用可能）'}
+              （最適化提案）
             </span>
           </div>
           {expandedSections.water ? 
@@ -123,7 +122,7 @@ const AnalysisTables = ({ tank, allTanks }) => {
         )}
       </div>
 
-      {/* 比較分析表 */}
+      {/* 比較分析 */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <button
           onClick={() => toggleSection('comparison')}
@@ -131,9 +130,9 @@ const AnalysisTables = ({ tank, allTanks }) => {
         >
           <div className="flex items-center space-x-2">
             <GitCompare className="w-5 h-5 text-purple-600" />
-            <h3 className="text-lg font-semibold">比較分析</h3>
+            <h3 className="text-lg font-semibold">他タンクとの比較</h3>
             <span className="text-sm text-gray-500">
-              （他タンク・過去データとの比較）
+              （同期タンク比較）
             </span>
           </div>
           {expandedSections.comparison ? 
