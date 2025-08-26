@@ -6,12 +6,43 @@ import OisuiAnalysis2 from './OisuiAnalysis2';
 import TemperatureAnalysis from './TemperatureAnalysis';
 import { COLUMN_NAMES } from '../utils/csvParser';
 
+// IntegratedModeling.jsx内のOisuiAnalysis2Integrationコンポーネントを以下に完全に置き換える
+
 // OisuiAnalysis2の機能を統合モデリング用に再実装
 const OisuiAnalysis2Integration = ({ tanks, selectedTankIds, params, onParamsChange }) => {
   const selectedTanks = useMemo(() => 
     tanks.filter(tank => selectedTankIds.includes(tank.tankId)),
     [tanks, selectedTankIds]
   );
+
+  // 真のアルコール係数計算（OisuiAnalysis2と同じロジック）
+  const calculateTrueCoefficientsFromMeta = (tank) => {
+    const metadata = tank.metadata || {};
+    
+    const startBaume = parseFloat(metadata[COLUMN_NAMES.META.AB_START_BAUME]);
+    const startAlcohol = parseFloat(metadata[COLUMN_NAMES.META.AB_START_ALCOHOL]);
+    const finalBaume = parseFloat(metadata[COLUMN_NAMES.META.FINAL_BAUME]);
+    const finalAlcohol = parseFloat(metadata[COLUMN_NAMES.META.FINAL_ALCOHOL]);
+    const totalVolume = parseFloat(metadata[COLUMN_NAMES.META.TOTAL_VOLUME]);
+    const totalWater = parseFloat(metadata[COLUMN_NAMES.META.TOTAL_WATER]) || 0;
+    
+    if (isNaN(startBaume) || isNaN(startAlcohol) || isNaN(finalBaume) || isNaN(finalAlcohol) || isNaN(totalVolume)) {
+      return { withWater: null, withoutWater: null };
+    }
+    
+    // 追い水反映（希釈効果を除去）
+    const dilutionFactor = (totalVolume + totalWater) / totalVolume;
+    const trueFinalBaumeWithWater = finalBaume * dilutionFactor;
+    const trueFinalAlcoholWithWater = finalAlcohol * dilutionFactor;
+    
+    const baumeChangeWithWater = startBaume - trueFinalBaumeWithWater;
+    const alcoholChangeWithWater = trueFinalAlcoholWithWater - startAlcohol;
+    
+    const coefficientWithWater = baumeChangeWithWater > 0 ? 
+      alcoholChangeWithWater / baumeChangeWithWater : null;
+    
+    return { withWater: coefficientWithWater, withoutWater: null };
+  };
 
   // アルコール閾値を超える日数を計算
   const calculateDaysToAlcoholThreshold = (tank, threshold) => {
@@ -33,297 +64,272 @@ const OisuiAnalysis2Integration = ({ tanks, selectedTankIds, params, onParamsCha
     return null;
   };
 
+  // selectedTankIds変更時に自動でパラメータ更新
+  useEffect(() => {
+    if (selectedTanks.length > 0) {
+      const firstTank = selectedTanks[0];
+      const defaultTargetBaume = parseFloat(firstTank.metadata?.[COLUMN_NAMES.META.FINAL_BAUME]) || -1.21;
+      const defaultTargetAlcohol = parseFloat(firstTank.metadata?.[COLUMN_NAMES.META.FINAL_ALCOHOL]) || 18.65;
+      const defaultAlcoholCoeff = calculateTrueCoefficientsFromMeta(firstTank)?.withWater || 0.64;
+      
+      onParamsChange({
+        alcoholCoeff: defaultAlcoholCoeff,
+        targetAlcoholThreshold: params.targetAlcoholThreshold || 15,
+        targetBaume: defaultTargetBaume,
+        targetAlcohol: defaultTargetAlcohol
+      });
+    }
+  }, [selectedTankIds]);
+
   // デフォルト値設定
   const setDefaultValues = () => {
     if (selectedTanks.length === 0) return;
     
     const firstTank = selectedTanks[0];
-    const metadata = firstTank.metadata || {};
-    
-    // 真のアルコール係数を計算
-    const calculateTrueCoefficient = (tank) => {
-      const metadata = tank.metadata || {};
-      const startBaume = parseFloat(metadata[COLUMN_NAMES.META.AB_START_BAUME]);
-      const startAlcohol = parseFloat(metadata[COLUMN_NAMES.META.AB_START_ALCOHOL]);
-      const finalBaume = parseFloat(metadata[COLUMN_NAMES.META.FINAL_BAUME]);
-      const finalAlcohol = parseFloat(metadata[COLUMN_NAMES.META.FINAL_ALCOHOL]);
-      const totalVolume = parseFloat(metadata[COLUMN_NAMES.META.TOTAL_VOLUME]);
-      const totalWater = parseFloat(metadata[COLUMN_NAMES.META.TOTAL_WATER]) || 0;
-      
-      if (isNaN(startBaume) || isNaN(startAlcohol) || isNaN(finalBaume) || isNaN(finalAlcohol) || isNaN(totalVolume)) {
-        return 0.64;
-      }
-      
-      const dilutionFactor = (totalVolume + totalWater) / totalVolume;
-      const trueFinalBaume = finalBaume * dilutionFactor;
-      const trueFinalAlcohol = finalAlcohol * dilutionFactor;
-      const baumeChange = startBaume - trueFinalBaume;
-      const alcoholChange = trueFinalAlcohol - startAlcohol;
-      
-      return baumeChange > 0 ? alcoholChange / baumeChange : 0.64;
-    };
+    const defaultTargetBaume = parseFloat(firstTank.metadata?.[COLUMN_NAMES.META.FINAL_BAUME]) || -1.21;
+    const defaultTargetAlcohol = parseFloat(firstTank.metadata?.[COLUMN_NAMES.META.FINAL_ALCOHOL]) || 18.65;
+    const defaultAlcoholCoeff = calculateTrueCoefficientsFromMeta(firstTank)?.withWater || 0.64;
     
     onParamsChange({
-      alcoholCoeff: calculateTrueCoefficient(firstTank),
+      alcoholCoeff: defaultAlcoholCoeff,
       targetAlcoholThreshold: 15,
-      targetBaume: parseFloat(metadata[COLUMN_NAMES.META.FINAL_BAUME]) || -1.21,
-      targetAlcohol: parseFloat(metadata[COLUMN_NAMES.META.FINAL_ALCOHOL]) || 18.65
+      targetBaume: defaultTargetBaume,
+      targetAlcohol: defaultTargetAlcohol
     });
   };
 
-  // 完了日数計算
-  const calculateCompletionDays = (tank, currentDay, threshold) => {
-    if (!tank.dailyData || !threshold) return 0;
+  // アルコール度数の計算（日数）
+  const calculateEstimatedDays = (tank, currentDay, threshold) => {
+    const thresholdDay = calculateDaysToAlcoholThreshold(tank, threshold);
+    return thresholdDay ? Math.max(0, Math.ceil(thresholdDay - currentDay)) : 12;
+  };
+
+  // その日時点での真のアルコール係数を計算（追い水反映）
+  const calculateDailyTrueAlcoholCoeff = (tank, currentDay, cumulativeWater) => {
+    const metadata = tank.metadata || {};
+    const totalVolume = parseFloat(metadata[COLUMN_NAMES.META.TOTAL_VOLUME]) || 3000;
     
-    const futureEntries = Object.entries(tank.dailyData || {})
-      .map(([key, data]) => ({
-        day: parseInt(data[COLUMN_NAMES.DAILY.DAY]),
-        alcohol: parseFloat(data[COLUMN_NAMES.DAILY.ALCOHOL])
-      }))
-      .filter(d => d.day > currentDay && !isNaN(d.alcohol))
-      .sort((a, b) => a.day - b.day);
+    // AB開始データ
+    const startBaume = parseFloat(metadata[COLUMN_NAMES.META.AB_START_BAUME]);
+    const startAlcohol = parseFloat(metadata[COLUMN_NAMES.META.AB_START_ALCOHOL]);
     
-    for (const entry of futureEntries) {
-      if (entry.alcohol >= threshold) {
-        return entry.day - currentDay;
-      }
+    // 現在日のデータ
+    const currentDayData = Object.entries(tank.dailyData || {}).find(([dayKey, dayData]) => {
+      return parseInt(dayData[COLUMN_NAMES.DAILY.DAY]) === currentDay;
+    });
+    
+    if (!currentDayData || isNaN(startBaume) || isNaN(startAlcohol)) {
+      return null;
     }
     
-    return 0;
+    const [, dayData] = currentDayData;
+    const currentBaume = parseFloat(dayData[COLUMN_NAMES.DAILY.BAUME_BMD_DAY]);
+    const currentAlcohol = parseFloat(dayData[COLUMN_NAMES.DAILY.ALCOHOL]);
+    
+    if (isNaN(currentBaume) || isNaN(currentAlcohol)) {
+      return null;
+    }
+    
+    // 希釈効果を除去（追い水反映）
+    const dilutionFactor = (totalVolume + cumulativeWater) / totalVolume;
+    const trueBaume = currentBaume * dilutionFactor;
+    const trueAlcohol = currentAlcohol * dilutionFactor;
+    
+    // 真のアルコール係数計算
+    const baumeChange = startBaume - trueBaume;
+    const alcoholChange = trueAlcohol - startAlcohol;
+    
+    return baumeChange > 0 ? alcoholChange / baumeChange : null;
   };
 
-  // 計算関数（OisuiAnalysis2から移植）
-  const calculateAnalysisData = useMemo(() => {
-    const analysisData = [];
-    
+  // 8日目以降のデータ処理
+  const analysisData = useMemo(() => {
+    if (selectedTanks.length === 0) return [];
+
+    const results = [];
+
     selectedTanks.forEach(tank => {
       const tankNumber = tank.metadata?.[COLUMN_NAMES.META.TANK_NUMBER] || tank.tankId;
-      const batchSize = parseFloat(tank.metadata?.[COLUMN_NAMES.META.BATCH_SIZE]) || 0;
-      const totalVolume = parseFloat(tank.metadata?.[COLUMN_NAMES.META.TOTAL_VOLUME]) || 0;
-      
-      let cumulativeWater = 0;
-      
-      // 日別データを処理
-      const dailyEntries = Object.entries(tank.dailyData || {})
-        .map(([dayKey, dayData]) => ({
-          day: parseInt(dayData[COLUMN_NAMES.DAILY.DAY]),
-          ...dayData
+      const batchSize = tank.metadata?.[COLUMN_NAMES.META.BATCH_SIZE] || '3000';
+      const totalVolume = parseFloat(tank.metadata?.[COLUMN_NAMES.META.TOTAL_VOLUME]) || parseFloat(batchSize);
+      const yeast = tank.metadata?.[COLUMN_NAMES.META.YEAST] || '不明';
+
+      // 8日目以降のデータを取得
+      const entries = Object.entries(tank.dailyData || {})
+        .map(([key, data]) => ({
+          day: parseInt(data[COLUMN_NAMES.DAILY.DAY]),
+          date: data[COLUMN_NAMES.DAILY.DATE],
+          baume: parseFloat(data[COLUMN_NAMES.DAILY.BAUME_BMD_DAY]) || parseFloat(data[COLUMN_NAMES.DAILY.BAUME]),
+          alcohol: parseFloat(data[COLUMN_NAMES.DAILY.ALCOHOL]),
+          water: parseFloat(data[COLUMN_NAMES.DAILY.WATER]) || 0
         }))
-        .filter(d => d.day >= 8)
+        .filter(d => d.day >= 8 && !isNaN(d.alcohol))
         .sort((a, b) => a.day - b.day);
-      
-      dailyEntries.forEach((dayData) => {
-        const currentBaume = parseFloat(dayData[COLUMN_NAMES.DAILY.BAUME_BMD_DAY]);
-        const currentAlcohol = parseFloat(dayData[COLUMN_NAMES.DAILY.ALCOHOL]);
-        const temp1 = parseFloat(dayData[COLUMN_NAMES.DAILY.TEMP_1]);
-        const tempChange = parseFloat(dayData[COLUMN_NAMES.DAILY.TEMP_CHANGE]);
-        const tempUpDown = dayData[COLUMN_NAMES.DAILY.TEMP_UP_DOWN];
-        const actualWater = parseFloat(dayData[COLUMN_NAMES.DAILY.WATER]) || 0;
+
+      entries.forEach(entry => {
+        // 累積追い水量計算
+        const cumulativeWater = Object.entries(tank.dailyData || {})
+          .filter(([key, data]) => {
+            const day = parseInt(data[COLUMN_NAMES.DAILY.DAY]);
+            return day <= entry.day;
+          })
+          .reduce((sum, [key, data]) => {
+            const water = parseFloat(data[COLUMN_NAMES.DAILY.WATER]) || 0;
+            return sum + water;
+          }, 0);
+
+        // 日次アルコール係数計算
+        const dailyTrueCoeff = calculateDailyTrueAlcoholCoeff(tank, entry.day, cumulativeWater);
+
+        // 必要追い水量計算
+        const remainingBaume = entry.baume - params.targetBaume;
+        const predictedAlcoholIncrease = remainingBaume * params.alcoholCoeff;
+        const predictedFinalAlcohol = entry.alcohol + predictedAlcoholIncrease;
         
-        if (!isNaN(currentBaume) && !isNaN(currentAlcohol)) {
-          const remainingBaume = currentBaume - params.targetBaume;
-          const predictedAlcoholIncrease = remainingBaume * params.alcoholCoeff;
-          const predictedFinalAlcohol = currentAlcohol + predictedAlcoholIncrease;
+        let requiredWater = 0;
+        let theoreticalWater = 0;
+        
+        if (predictedFinalAlcohol > params.targetAlcohol) {
+          // OisuiAnalysis2と同じ計算方法
+          const currentVolume = totalVolume; // 累積追い水量は考慮しない
+          const dilutionRatio = params.targetAlcohol / predictedFinalAlcohol;
+          const requiredFinalVolume = currentVolume / dilutionRatio;
+          requiredWater = requiredFinalVolume - currentVolume;
           
-          // 追い水量計算
-          let requiredTotalWater = 0;
-          let theoreticalWater = 0;
-          
-          if (predictedFinalAlcohol > params.targetAlcohol) {
-            const currentVolume = totalVolume;
-            const dilutionRatio = params.targetAlcohol / predictedFinalAlcohol;
-            const requiredFinalVolume = currentVolume / dilutionRatio;
-            requiredTotalWater = requiredFinalVolume - currentVolume;
-            
-            const remainingDays = calculateCompletionDays(tank, dayData.day, params.targetAlcoholThreshold);
-            
-            if (remainingDays <= 0) {
-              theoreticalWater = requiredTotalWater;
-            } else {
-              theoreticalWater = requiredTotalWater / remainingDays * 2; // 1回分
-            }
+          // 理論的な追い水量（分割考慮）
+          const remainingDays = calculateEstimatedDays(tank, entry.day, params.targetAlcoholThreshold);
+          if (remainingDays <= 0) {
+            theoreticalWater = requiredWater;
+          } else {
+            theoreticalWater = requiredWater / remainingDays * 2; // 1回分
           }
-          
-          // 真のアルコール係数（日次）
-          const dailyBaumeChange = parseFloat(dayData[COLUMN_NAMES.DAILY.BAUME_CHANGE]);
-          const dailyAlcoholChange = parseFloat(dayData[COLUMN_NAMES.DAILY.ALCOHOL_CHANGE]);
-          const dailyTrueCoeff = (!isNaN(dailyBaumeChange) && dailyBaumeChange !== 0) ? 
-            dailyAlcoholChange / Math.abs(dailyBaumeChange) : null;
-          
-          analysisData.push({
-            tankId: tank.tankId,
-            tankNumber,
-            day: dayData.day,
-            batchSize,
-            temp1,
-            tempChange,
-            tempUpDown,
-            currentBaume,
-            currentAlcohol,
-            remainingBaume,
-            predictedAlcoholIncrease,
-            predictedFinalAlcohol,
-            dailyTrueCoeff,
-            cumulativeWater,
-            requiredTotalWater,
-            theoreticalWater,
-            actualWater
-          });
-          
-          cumulativeWater += actualWater;
         }
+
+        // 到達予想日数
+        const estimatedDays = calculateEstimatedDays(tank, entry.day, params.targetAlcoholThreshold);
+
+        results.push({
+          tankNumber,
+          yeast,
+          day: entry.day,
+          date: entry.date || '-',
+          baume: entry.baume,
+          alcohol: entry.alcohol,
+          trueCoeff: calculateTrueCoefficientsFromMeta(tank)?.withWater,
+          dailyTrueCoeff,
+          cumulativeWater,
+          requiredTotalWater: requiredWater,
+          theoreticalWater,
+          actualWater: entry.water,
+          estimatedDays
+        });
       });
     });
-    
-    return analysisData.sort((a, b) => {
-      if (a.tankNumber !== b.tankNumber) return a.tankNumber - b.tankNumber;
-      return a.day - b.day;
-    });
+
+    return results;
   }, [selectedTanks, params]);
 
+
+  // 数値フォーマット
   const formatNumber = (value, decimals = 2) => {
     if (value === null || value === undefined || isNaN(value)) return '-';
-    return Number(value).toFixed(decimals);
-  };
-
-  const getTempClass = (temp) => {
-    if (temp < 6) return 'text-blue-600';
-    if (temp > 15) return 'text-red-600';
-    return '';
-  };
-
-  const getUpDownSymbol = (upDown) => {
-    if (!upDown) return '-';
-    if (upDown === '上') return '↑';
-    if (upDown === '下') return '↓';
-    return upDown;
+    return value.toFixed(decimals);
   };
 
   return (
-    <div className="space-y-6">
-      <div className="bg-white p-6 rounded-lg shadow">
-        <h2 className="text-xl font-bold mb-4 text-gray-800">🌾 8日目以降 追い水計算検証</h2>
-        
-        {/* 計算パラメータ設定 */}
-        <div className="bg-blue-50 p-4 rounded-lg mb-6">
-          <h3 className="text-lg font-semibold mb-4">🔧 計算パラメータ設定</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                アルコール係数
-              </label>
-              <input
-                type="number"
-                step="0.001"
-                value={params.alcoholCoeff || ''}
-                onChange={(e) => onParamsChange({
-                  ...params,
-                  alcoholCoeff: e.target.value === '' ? 0 : parseFloat(e.target.value)
-                })}
-                className="w-full p-2 border border-gray-300 rounded text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                アルコール度数が
-                <input
-                  type="number"
-                  step="0.1"
-                  value={params.targetAlcoholThreshold || ''}
-                  onChange={(e) => onParamsChange({
-                    ...params,
-                    targetAlcoholThreshold: e.target.value === '' ? 0 : parseFloat(e.target.value)
-                  })}
-                  className="w-16 mx-1 p-1 border border-gray-300 rounded text-xs"
-                />
-                % 超える日数
-              </label>
-              <div className="text-sm text-gray-600 mt-1">
-                {selectedTanks.length > 0 && calculateDaysToAlcoholThreshold(selectedTanks[0], params.targetAlcoholThreshold) ? 
-                  Math.ceil(calculateDaysToAlcoholThreshold(selectedTanks[0], params.targetAlcoholThreshold)) + '日' : '-'}
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                目標ボーメ
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                value={params.targetBaume || ''}
-                onChange={(e) => onParamsChange({
-                  ...params,
-                  targetBaume: e.target.value === '' ? 0 : parseFloat(e.target.value)
-                })}
-                className="w-full p-2 border border-gray-300 rounded text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                目標アルコール
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                value={params.targetAlcohol || ''}
-                onChange={(e) => onParamsChange({
-                  ...params,
-                  targetAlcohol: e.target.value === '' ? 0 : parseFloat(e.target.value)
-                })}
-                className="w-full p-2 border border-gray-300 rounded text-sm"
-              />
-            </div>
-          </div>
+    <div className="space-y-4">
+      {/* パラメータ設定 */}
+      <div className="bg-blue-50 p-4 rounded-lg">
+        <div className="flex items-center justify-between mb-3">
+          <h5 className="font-medium text-gray-700">パラメータ設定（編集可能）</h5>
           <button
             onClick={setDefaultValues}
-            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+            className="text-sm text-blue-600 hover:text-blue-700 underline"
           >
-            デフォルト値設定
+            デフォルト値に戻す
           </button>
         </div>
+        
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">アルコール係数</label>
+            <input
+              type="number"
+              step="0.01"
+              value={params.alcoholCoeff}
+              onChange={(e) => onParamsChange({ ...params, alcoholCoeff: parseFloat(e.target.value) || 0 })}
+              className="w-full px-2 py-1 border rounded"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">アルコール閾値(%)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={params.targetAlcoholThreshold}
+              onChange={(e) => onParamsChange({ ...params, targetAlcoholThreshold: parseFloat(e.target.value) || 0 })}
+              className="w-full px-2 py-1 border rounded"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">目標ボーメ</label>
+            <input
+              type="number"
+              step="0.01"
+              value={params.targetBaume}
+              onChange={(e) => onParamsChange({ ...params, targetBaume: parseFloat(e.target.value) || 0 })}
+              className="w-full px-2 py-1 border rounded"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">目標アルコール(%)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={params.targetAlcohol}
+              onChange={(e) => onParamsChange({ ...params, targetAlcohol: parseFloat(e.target.value) || 0 })}
+              className="w-full px-2 py-1 border rounded"
+            />
+          </div>
+        </div>
+      </div>
 
-        {/* 検証テーブル */}
-        {calculateAnalysisData.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse border border-gray-300 text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">タンク番号</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">日数</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">仕込み規模</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">品温1回</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">品温変動</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">品温上下</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">現在ボーメ</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">現在アルコール</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">残存ボーメ</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">予想アルコール増加</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">予想最終アルコール</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">真のアルコール係数</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">累積追い水量</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">必要追い水量(総量)</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">理論追い水量(1回分)</th>
-                  <th className="border border-gray-300 p-2 text-sm font-medium">実際追い水量</th>
+      {/* 結果表示 */}
+      <div className="overflow-x-auto">
+        {analysisData.length > 0 ? (
+          <div>
+            <table className="min-w-full border-collapse">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="border border-gray-300 p-2 text-left">タンク</th>
+                  <th className="border border-gray-300 p-2 text-left">酵母</th>
+                  <th className="border border-gray-300 p-2 text-center">日数</th>
+                  <th className="border border-gray-300 p-2 text-center">日付</th>
+                  <th className="border border-gray-300 p-2 text-center">ボーメ</th>
+                  <th className="border border-gray-300 p-2 text-center">アルコール(%)</th>
+                  <th className="border border-gray-300 p-2 text-center">真の係数</th>
+                  <th className="border border-gray-300 p-2 text-center">日次係数</th>
+                  <th className="border border-gray-300 p-2 text-center">累積追水(L)</th>
+                  <th className="border border-gray-300 p-2 text-center">必要追水(L)</th>
+                  <th className="border border-gray-300 p-2 text-center">理論追水(L)</th>
+                  <th className="border border-gray-300 p-2 text-center">実際追水(L)</th>
+                  <th className="border border-gray-300 p-2 text-center">閾値まで</th>
                 </tr>
               </thead>
               <tbody>
-                {calculateAnalysisData.map((data, index) => (
-                  <tr key={`${data.tankId}-${data.day}-${index}`} className="hover:bg-gray-50">
-                    <td className="border border-gray-300 p-2 text-center font-medium">{data.tankNumber}</td>
+                {analysisData.map((data, index) => (
+                  <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                    <td className="border border-gray-300 p-2">{data.tankNumber}</td>
+                    <td className="border border-gray-300 p-2">{data.yeast}</td>
                     <td className="border border-gray-300 p-2 text-center">{data.day}</td>
-                    <td className="border border-gray-300 p-2 text-center">{data.batchSize}</td>
-                    <td className={`border border-gray-300 p-2 text-center ${getTempClass(data.temp1)}`}>
-                      {formatNumber(data.temp1, 1)}
+                    <td className="border border-gray-300 p-2 text-center">{data.date}</td>
+                    <td className="border border-gray-300 p-2 text-center">{formatNumber(data.baume, 2)}</td>
+                    <td className="border border-gray-300 p-2 text-center">{formatNumber(data.alcohol, 1)}</td>
+                    <td className="border border-gray-300 p-2 text-center">
+                      {data.trueCoeff ? formatNumber(data.trueCoeff, 3) : '-'}
                     </td>
-                    <td className="border border-gray-300 p-2 text-center">{formatNumber(data.tempChange, 1)}</td>
-                    <td className="border border-gray-300 p-2 text-center">{getUpDownSymbol(data.tempUpDown)}</td>
-                    <td className="border border-gray-300 p-2 text-center">{formatNumber(data.currentBaume, 2)}</td>
-                    <td className="border border-gray-300 p-2 text-center">{formatNumber(data.currentAlcohol, 1)}</td>
-                    <td className="border border-gray-300 p-2 text-center">{formatNumber(data.remainingBaume, 2)}</td>
-                    <td className="border border-gray-300 p-2 text-center">{formatNumber(data.predictedAlcoholIncrease, 2)}</td>
-                    <td className="border border-gray-300 p-2 text-center font-medium">{formatNumber(data.predictedFinalAlcohol, 1)}</td>
-                    <td className="border border-gray-300 p-2 text-center bg-orange-50">
-                      {data.dailyTrueCoeff !== null ? formatNumber(data.dailyTrueCoeff, 3) : '-'}
+                    <td className="border border-gray-300 p-2 text-center">
+                      {data.dailyTrueCoeff ? formatNumber(data.dailyTrueCoeff, 3) : '-'}
                     </td>
                     <td className="border border-gray-300 p-2 text-center bg-purple-50">
                       {formatNumber(data.cumulativeWater, 0)}
@@ -336,6 +342,9 @@ const OisuiAnalysis2Integration = ({ tanks, selectedTankIds, params, onParamsCha
                     </td>
                     <td className="border border-gray-300 p-2 text-center bg-blue-50">
                       {formatNumber(data.actualWater, 0)}
+                    </td>
+                    <td className="border border-gray-300 p-2 text-center">
+                      {data.estimatedDays > 0 ? `${data.estimatedDays}日` : '超過'}
                     </td>
                   </tr>
                 ))}

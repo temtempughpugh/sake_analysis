@@ -12,7 +12,9 @@ const TankMetadataForm = ({ initialData, onSave, onCancel }) => {
     [COLUMN_NAMES.META.TOTAL_VOLUME]: '',
     '汲み水歩合': '',
     '仕込み日': '',
-    '上槽日': ''
+    '上槽日': '',
+    '目標ボーメ': '',      // 追加
+    '目標アルコール度数': '' // 追加
   });
 
   // 初期データがある場合は設定
@@ -198,6 +200,41 @@ const TankMetadataForm = ({ initialData, onSave, onCancel }) => {
             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
+{/* 第3行 - 目標値 */}
+<div className="grid grid-cols-2 gap-4">
+  {/* 目標ボーメ */}
+  <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">
+      目標ボーメ
+    </label>
+    <input
+      type="number"
+      step="0.01"
+      name="目標ボーメ"
+      value={formData['目標ボーメ']}
+      onChange={handleChange}
+      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+      placeholder="例: -1.21"
+    />
+  </div>
+
+  {/* 目標アルコール度数 */}
+  <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">
+      目標アルコール度数 (%)
+    </label>
+    <input
+      type="number"
+      step="0.01"
+      name="目標アルコール度数"
+      value={formData['目標アルコール度数']}
+      onChange={handleChange}
+      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+      placeholder="例: 18.65"
+    />
+  </div>
+</div>
+
       </div>
 
       {/* 日次データから算出される項目（読み取り専用） */}
