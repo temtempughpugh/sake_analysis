@@ -1,195 +1,243 @@
-// メインコンポーネント: IntegratedAnalysis.jsx
-import React, { useState, useMemo } from 'react';
-import { AlertCircle } from 'lucide-react';
-import IntegratedAnalysisTable from './IntegratedAnalysisTable';
-import ProgressPrediction from './ProgressPrediction';
-import TemperaturePrediction from './TemperaturePrediction';
-import WaterAnalysis from './WaterAnalysis';
+// src/components/RealTimeDataEntry/IntegratedAnalysisTable.jsx
+import React, { useMemo } from 'react';
+import { COLUMN_NAMES } from '../../utils/csvParser';
 
-const IntegratedAnalysis = ({ currentTank, allTanks }) => {
-  const [selectedModel, setSelectedModel] = useState(null);
-  const [showModelList, setShowModelList] = useState(false);
-  const [selectedPattern, setSelectedPattern] = useState(null);
+const IntegratedAnalysisTable = ({ currentTankData, selectedModel, selectedPattern }) => {
+  // 基準設定の自動取得
+  const getBaseSettings = (tankData) => {
+    if (!tankData?.dailyData) return null;
 
-  // 統合モデル一覧を取得
-  const integratedModels = useMemo(() => {
-    try {
-      const saved = localStorage.getItem('integratedModels');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
+    // 最高BMDの検出
+    let maxBMD = -Infinity;
+    let maxBMDDay = null;
+
+    tankData.dailyData.forEach(d => {
+      const bmd = d[COLUMN_NAMES.DAILY.BMD_COMPLEMENT];
+      if (!isNaN(bmd) && bmd > maxBMD) {
+        maxBMD = bmd;
+        maxBMDDay = d.day;
+      }
+    });
+
+    // 最終日計算（上槽日がある場合）
+    const startDate = tankData.metadata?.['仕込み日'] ? new Date(tankData.metadata['仕込み日']) : null;
+    const endDate = tankData.metadata?.['上槽日'] ? new Date(tankData.metadata['上槽日']) : null;
+    
+    let finalDay = null;
+    if (startDate && endDate) {
+      finalDay = Math.floor((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
     }
-  }, []);
 
-  // 現在のタンクデータを整理 (day12形式で取得)
-  const currentTankData = useMemo(() => {
-    if (!currentTank) return null;
-
-    const dailyEntries = Object.entries(currentTank.dailyData || {})
-      .map(([key, data]) => {
-        if (!key.startsWith('day')) return null;
-        const day = parseInt(key.replace('day', ''));
-        return {
-          day,
-          月日: data['月日'],
-          日数: data['日数'],
-          品温1回目: parseFloat(data['品温1回目']),
-          'ボーメ(BMD/日数)': parseFloat(data['ボーメ(BMD/日数)']),
-          'ボーメ(補完)': parseFloat(data['ボーメ(補完)']),
-          'アルコール(補完)': parseFloat(data['アルコール(補完)']),
-          'BMD(補完)': parseFloat(data['BMD(補完)']),
-          追水: parseFloat(data['追水']) || 0
-        };
-      })
-      .filter(d => d && !isNaN(d.day))
-      .sort((a, b) => a.day - b.day);
-
-    const currentDay = Math.max(...dailyEntries.map(d => d.day));
-    const latestData = dailyEntries.find(d => d.day === currentDay);
+    // 最終BMD計算
+    const targetBaume = parseFloat(tankData.metadata?.['目標ボーメ']) || -1.5;
+    const finalBMD = finalDay ? targetBaume * finalDay : null;
 
     return {
-      tankId: currentTank.tankId,
-      tankNumber: currentTank.metadata?.['順号'] || currentTank.tankId,
-      dailyData: dailyEntries,
-      currentDay,
-      latestData,
-      metadata: currentTank.metadata
+      maxBMD,
+      maxBMDDay,
+      finalBMD,
+      finalDay,
+      targetBaume
     };
-  }, [currentTank]);
+  };
+
+  // 理想BMD計算
+  const calculateIdealBMD = (day, baseSettings, pattern) => {
+    if (!baseSettings || !pattern?.data || !baseSettings.maxBMD || !baseSettings.finalBMD) return null;
+
+    const { maxBMD, maxBMDDay, finalBMD, finalDay } = baseSettings;
+
+    if (!maxBMDDay || !finalDay || day <= maxBMDDay) return null;
+
+    // 発酵進行度
+    const fermentationProgress = ((day - maxBMDDay) / (finalDay - maxBMDDay)) * 100;
+
+    // パターンから進捗率を線形補間で取得
+    let progressRate = 0;
+    const patternData = pattern.data || [];
+    
+    for (let i = 0; i < patternData.length - 1; i++) {
+      if (patternData[i].x <= fermentationProgress && patternData[i + 1].x >= fermentationProgress) {
+        const ratio = (fermentationProgress - patternData[i].x) / 
+                     (patternData[i + 1].x - patternData[i].x);
+        progressRate = patternData[i].y + (patternData[i + 1].y - patternData[i].y) * ratio;
+        break;
+      }
+    }
+
+    // 理想BMD
+    return maxBMD - (maxBMD - finalBMD) * (progressRate / 100);
+  };
+
+  // 予測値の計算
+  const calculatePredictions = (dayData, baseSettings, selectedModel) => {
+    // 品温変動予測
+    let tempPrediction = null;
+    if (selectedModel?.temperatureData && dayData[COLUMN_NAMES.DAILY.TEMP_1]) {
+      const currentTemp = dayData[COLUMN_NAMES.DAILY.TEMP_1];
+      const currentAlcohol = dayData[COLUMN_NAMES.DAILY.ALCOHOL_ESTIMATED];
+      
+      if (!isNaN(currentTemp) && !isNaN(currentAlcohol)) {
+        const tempBase = Math.floor(currentTemp * 2) / 2;
+        const alcoholBase = Math.floor(currentAlcohol);
+        
+        // 類似データを抽出
+        const matchingData = selectedModel.temperatureData.filter(d =>
+          d.temp >= tempBase && d.temp < tempBase + 0.5 &&
+          d.alcohol >= alcoholBase && d.alcohol < alcoholBase + 1
+        );
+        
+        if (matchingData.length > 0) {
+          const baumeChanges = matchingData.map(d => d.baumeChange).sort((a, b) => a - b);
+          tempPrediction = baumeChanges[Math.floor(baumeChanges.length / 2)]; // 中央値
+        }
+      }
+    }
+    
+    return {
+      baumePrediction: tempPrediction,
+      alcoholChange: tempPrediction ? tempPrediction * 0.64 : null // 仮のアルコール係数
+    };
+  };
+
+  // 基準設定を先に計算
+  const baseSettings = useMemo(() => getBaseSettings(currentTankData), [currentTankData]);
+
+  // 統合分析データの生成
+  const analysisData = useMemo(() => {
+    if (!currentTankData?.dailyData) return [];
+    
+    if (!baseSettings) return [];
+
+    return currentTankData.dailyData.map(dayData => {
+      const idealBMD = calculateIdealBMD(dayData.day, baseSettings, selectedPattern);
+      const actualBMD = dayData[COLUMN_NAMES.DAILY.BMD_COMPLEMENT];
+      const difference = (idealBMD && !isNaN(actualBMD)) ? actualBMD - idealBMD : null;
+      
+      const predictions = calculatePredictions(dayData, baseSettings, selectedModel);
+      
+      return {
+        day: dayData.day,
+        temp: dayData[COLUMN_NAMES.DAILY.TEMP_1],
+        baume: {
+          actual: dayData[COLUMN_NAMES.DAILY.BAUME_ESTIMATED],
+          predicted: predictions.baumePrediction,
+          difference: null
+        },
+        alcohol: {
+          actual: dayData[COLUMN_NAMES.DAILY.ALCOHOL_ESTIMATED],
+          change: predictions.alcoholChange
+        },
+        bmd: {
+          actual: actualBMD,
+          ideal: idealBMD,
+          difference: difference
+        },
+        isCurrent: dayData.day === currentTankData.currentDay
+      };
+    });
+  }, [currentTankData, selectedPattern, selectedModel, baseSettings]);
+
+  // 進捗状態の判定
+  const getProgressStatus = (difference) => {
+    if (difference === null) return '';
+    const abs = Math.abs(difference);
+    if (abs < 0.5) return '順調';
+    if (abs < 1.0) return difference > 0 ? '遅れ' : '進み';
+    return difference > 0 ? '大幅遅れ' : '大幅進み';
+  };
 
   return (
-    <div className="space-y-6">
-      <div className="bg-white p-6 rounded-lg shadow">
-        <h2 className="text-xl font-bold mb-4">リアルタイム統合分析 - タンク{currentTankData?.tankNumber}</h2>
-        
-        {/* 統合モデル選択 */}
-        <div className="mb-6 p-4 border rounded-lg">
-          <div className="flex items-center justify-between mb-2">
-            <label className="block text-sm font-medium text-gray-700">統合モデル</label>
-            <button
-              onClick={() => setShowModelList(!showModelList)}
-              className="text-sm text-blue-600 hover:text-blue-800"
-            >
-              {showModelList ? '閉じる' : 'モデル一覧を表示'}
-            </button>
-          </div>
-          
-          {selectedModel ? (
-            <div className="text-sm">
-              <div className="font-medium">{selectedModel.name}</div>
-              <div className="text-gray-600">
-                作成日: {new Date(selectedModel.savedAt).toLocaleDateString()}
-                （元タンク: {selectedModel.sourceTankIds.join(', ')}）
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-gray-600">
-              統合モデルを選択すると、過去の発酵パターンに基づいて予測・分析を行います
-            </p>
-          )}
-
-          {/* モデル一覧 */}
-          {showModelList && (
-            <div className="mt-4 max-h-60 overflow-y-auto">
-              {integratedModels.length === 0 ? (
-                <p className="text-sm text-gray-500">保存された統合モデルがありません</p>
-              ) : (
-                <div className="space-y-2">
-                  {integratedModels.map(model => (
-                    <div
-                      key={model.id}
-                      className={`p-3 border rounded cursor-pointer transition-colors ${
-                        selectedModel?.id === model.id
-                          ? 'border-blue-500 bg-blue-100'
-                          : 'border-gray-300 hover:bg-gray-50'
-                      }`}
-                      onClick={() => {
-                        setSelectedModel(model);
-                        setSelectedPattern(model.progressData?.patterns?.[0] || null);
-                        setShowModelList(false);
-                      }}
-                    >
-                      <div className="font-medium text-sm">{model.name}</div>
-                      <div className="text-xs text-gray-600">
-                        {new Date(model.savedAt).toLocaleString()} | 
-                        タンク: {model.sourceTankIds.join(', ')}
-                      </div>
+    <div className="mb-6">
+      <h3 className="text-lg font-semibold mb-4">統合分析表</h3>
+      <div className="overflow-x-auto">
+        <table className="min-w-full border border-gray-300">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="border px-3 py-2 text-left text-sm">日数</th>
+              <th className="border px-3 py-2 text-left text-sm">品温</th>
+              <th className="border px-3 py-2 text-left text-sm">
+                ボーメ<br />
+                <span className="text-xs">実測/予測/差分</span>
+              </th>
+              <th className="border px-3 py-2 text-left text-sm">
+                アルコール<br />
+                <span className="text-xs">実測/変動</span>
+              </th>
+              <th className="border px-3 py-2 text-left text-sm">
+                BMD<br />
+                <span className="text-xs">実測/理想</span>
+              </th>
+              <th className="border px-3 py-2 text-left text-sm">状態</th>
+            </tr>
+          </thead>
+          <tbody>
+            {analysisData.map((data, index) => (
+              <tr key={`row-${data.day || index}`} className={data.isCurrent ? 'bg-blue-50' : ''}>
+                <td className="border px-3 py-2 font-medium">
+                  {data.day}
+                  {data.isCurrent && <span className="ml-2 text-sm text-blue-600">現在</span>}
+                </td>
+                <td className="border px-3 py-2">
+                  {!isNaN(data.temp) ? data.temp.toFixed(1) : '---'}
+                </td>
+                <td className="border px-3 py-2">
+                  <div className="text-sm">
+                    <span>{!isNaN(data.baume.actual) ? data.baume.actual.toFixed(2) : '---'}</span>
+                    {' / '}
+                    <span>{data.baume.predicted ? data.baume.predicted.toFixed(2) : '---'}</span>
+                    {' / '}
+                    <span>{data.baume.difference ? data.baume.difference.toFixed(2) : '---'}</span>
+                  </div>
+                </td>
+                <td className="border px-3 py-2">
+                  <div className="text-sm">
+                    <span>{!isNaN(data.alcohol.actual) ? data.alcohol.actual.toFixed(1) : '---'}</span>
+                    {' / '}
+                    <span className={data.alcohol.change > 0 ? 'text-green-600' : 'text-red-600'}>
+                      {data.alcohol.change ? 
+                        (data.alcohol.change > 0 ? '+' : '') + data.alcohol.change.toFixed(2) : 
+                        '---'}
+                    </span>
+                  </div>
+                </td>
+                <td className="border px-3 py-2">
+                  <div className="text-sm">
+                    <span>{!isNaN(data.bmd.actual) ? data.bmd.actual.toFixed(1) : '---'}</span>
+                    {' / '}
+                    <span>{data.bmd.ideal ? data.bmd.ideal.toFixed(1) : '---'}</span>
+                  </div>
+                  {data.bmd.difference !== null && (
+                    <div className={`text-xs ${data.bmd.difference > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {data.bmd.difference > 0 ? '↑' : '↓'} {Math.abs(data.bmd.difference).toFixed(1)}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* 進捗パターン選択 */}
-        {selectedModel?.progressData?.patterns && selectedModel.progressData.patterns.length > 0 && (
-          <div className="mb-6 p-4 border rounded-lg">
-            <label className="block text-sm font-medium text-gray-700 mb-2">進捗パターン</label>
-            <select
-              value={selectedPattern?.name || ''}
-              onChange={(e) => {
-                const pattern = selectedModel.progressData.patterns.find(p => p.name === e.target.value);
-                setSelectedPattern(pattern || null);
-              }}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">パターンを選択してください</option>
-              {selectedModel.progressData.patterns.map((pattern, index) => (
-                <option key={index} value={pattern.name}>
-                  {pattern.name} ({pattern.method || 'unknown'})
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {!selectedModel && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-            <div className="flex items-start space-x-2">
-              <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-              <div className="text-sm text-yellow-800">
-                <p className="font-medium">統合モデルを選択してください</p>
-                <p className="mt-1">
-                  分析モードで作成した統合モデルを選択すると、そのモデルに基づいて現在の発酵状況を分析・予測できます。
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {selectedModel && currentTankData && selectedPattern && (
-          <>
-            {/* 統合分析表 */}
-            <IntegratedAnalysisTable 
-              currentTankData={currentTankData}
-              selectedModel={selectedModel}
-              selectedPattern={selectedPattern}
-            />
+                  )}
+                </td>
+                <td className="border px-3 py-2">
+                  <span className={`text-sm font-medium ${
+                    data.bmd.difference === null ? 'text-gray-400' :
+                    Math.abs(data.bmd.difference) < 0.5 ? 'text-green-600' :
+                    Math.abs(data.bmd.difference) < 1.0 ? 'text-yellow-600' : 'text-red-600'
+                  }`}>
+                    {getProgressStatus(data.bmd.difference)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+            {analysisData.length === 0 && (
+              <tr>
+                <td colSpan="6" className="border px-3 py-4 text-center text-gray-500">
+                  データがありません
+                </td>
+              </tr>
+            )}
             
-            {/* 進捗予測 */}
-            <ProgressPrediction 
-              currentTankData={currentTankData}
-              selectedModel={selectedModel}
-              selectedPattern={selectedPattern}
-            />
-            
-            {/* 品温変動予測 */}
-            <TemperaturePrediction 
-              currentTankData={currentTankData}
-              selectedModel={selectedModel}
-            />
-            
-            {/* 追い水提案 */}
-            <WaterAnalysis 
-              currentTankData={currentTankData}
-              selectedModel={selectedModel}
-            />
-          </>
-        )}
+
+          </tbody>
+        </table>
       </div>
     </div>
   );
 };
 
-export default IntegratedAnalysis;
+export default IntegratedAnalysisTable;

@@ -17,22 +17,22 @@ const AnalysisTables = ({ tank, allTanks }) => {
     }));
   };
 
-  // 日次データが存在するかチェック
-  const hasDailyData = tank?.dailyData && Object.keys(tank.dailyData).length > 0;
+  // 日次データが存在するかチェック（修正版）
+  const hasDailyData = tank?.dailyData && Object.keys(tank.dailyData).some(key => 
+    key.startsWith('day') && 
+    tank.dailyData[key] && 
+    Object.values(tank.dailyData[key]).some(val => val && val.toString().trim() !== '')
+  );
   
-  if (!hasDailyData) {
-    return (
-      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-800">
-        <p className="text-sm">日次データが入力されると分析機能が利用可能になります。</p>
-      </div>
-    );
-  }
-
   // 現在の日数を取得
   const getCurrentDay = () => {
-    const days = Object.values(tank.dailyData)
-      .map(d => parseInt(d['日数']))
+    if (!tank?.dailyData) return 0;
+    
+    const days = Object.entries(tank.dailyData)
+      .filter(([key, data]) => key.startsWith('day') && data && data['日数'])
+      .map(([key, data]) => parseInt(data['日数']))
       .filter(d => !isNaN(d));
+    
     return days.length > 0 ? Math.max(...days) : 0;
   };
 
@@ -40,6 +40,16 @@ const AnalysisTables = ({ tank, allTanks }) => {
 
   return (
     <div className="space-y-4">
+      {/* データ状況の表示（デバッグ用） */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs">
+          <div>Tank ID: {tank?.tankId}</div>
+          <div>Daily Data Keys: {tank?.dailyData ? Object.keys(tank.dailyData).join(', ') : 'none'}</div>
+          <div>Has Daily Data: {hasDailyData.toString()}</div>
+          <div>Current Day: {currentDay}</div>
+        </div>
+      )}
+
       {/* 統合分析 */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <button
@@ -61,10 +71,19 @@ const AnalysisTables = ({ tank, allTanks }) => {
         
         {expandedSections.integrated && (
           <div className="border-t border-gray-200">
-            <IntegratedAnalysis currentTank={tank} tanks={allTanks} />
+            <IntegratedAnalysis currentTank={tank} allTanks={allTanks} />
           </div>
         )}
       </div>
+
+      {!hasDailyData && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-800">
+          <p className="text-sm">
+            一部の分析機能は日次データが入力されると利用可能になります。
+            統合分析は保存済みの統合モデルがあれば利用できます。
+          </p>
+        </div>
+      )}
 
       {/* 進捗予測表 */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
@@ -76,7 +95,7 @@ const AnalysisTables = ({ tank, allTanks }) => {
             <TrendingUp className="w-5 h-5 text-blue-600" />
             <h3 className="text-lg font-semibold">進捗予測分析</h3>
             <span className="text-sm text-gray-500">
-              （{currentDay}日目）
+              {currentDay > 0 ? `（${currentDay}日目）` : ''}
             </span>
           </div>
           {expandedSections.progress ? 
@@ -87,9 +106,17 @@ const AnalysisTables = ({ tank, allTanks }) => {
         
         {expandedSections.progress && (
           <div className="p-4 border-t border-gray-200">
-            <div className="text-center text-gray-500 py-8">
-              <p>進捗予測機能は開発中です</p>
-            </div>
+            {hasDailyData ? (
+              <div className="text-center text-gray-500 py-8">
+                <p>進捗予測機能は開発中です</p>
+              </div>
+            ) : (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <p className="text-sm text-yellow-800">
+                  進捗予測を行うには日次データの入力が必要です
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -115,9 +142,17 @@ const AnalysisTables = ({ tank, allTanks }) => {
         
         {expandedSections.water && (
           <div className="p-4 border-t border-gray-200">
-            <div className="text-center text-gray-500 py-8">
-              <p>追い水分析機能は開発中です</p>
-            </div>
+            {hasDailyData ? (
+              <div className="text-center text-gray-500 py-8">
+                <p>追い水分析機能は開発中です</p>
+              </div>
+            ) : (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <p className="text-sm text-yellow-800">
+                  追い水分析を行うには日次データの入力が必要です
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -143,9 +178,17 @@ const AnalysisTables = ({ tank, allTanks }) => {
         
         {expandedSections.comparison && (
           <div className="p-4 border-t border-gray-200">
-            <div className="text-center text-gray-500 py-8">
-              <p>比較分析機能は開発中です</p>
-            </div>
+            {hasDailyData ? (
+              <div className="text-center text-gray-500 py-8">
+                <p>比較分析機能は開発中です</p>
+              </div>
+            ) : (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <p className="text-sm text-yellow-800">
+                  比較分析を行うには日次データの入力が必要です
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
