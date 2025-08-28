@@ -230,6 +230,8 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
       const prediction = calculatePrediction(tank, settings, curve, status);
       setPredictionResult(prediction);
     }
+    }, [tank, selectedModel, selectedPattern]);
+    
   // チャートデータの作成
   const getChartData = () => {
     const datasets = [];
