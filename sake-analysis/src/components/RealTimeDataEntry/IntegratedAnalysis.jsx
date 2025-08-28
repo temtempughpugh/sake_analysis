@@ -116,6 +116,31 @@ const IntegratedAnalysis = ({ tank }) => {
     return null;
   };
 
+  const getPatternData = (patternName, model) => {
+  if (!patternName || !model) return null;
+
+  if (patternName.startsWith('タンク')) {
+    const tankNumber = patternName.replace('タンク', '');
+    const tankData = model.progressData?.tankAnalysis?.find(t => {
+      // 型変換して比較
+      return t.tankNumber.toString() === tankNumber.toString();
+    });
+    
+    if (tankData && tankData.progressRates) {
+      return tankData.progressRates;
+    }
+    return null;
+  }
+
+  // 統合パターンの場合
+  const unifiedPattern = model.progressData?.patterns?.find(p => p.name === patternName);
+  if (unifiedPattern && unifiedPattern.data) {
+    return unifiedPattern.data;
+  }
+
+  return null;
+};
+
   const errorMessage = getErrorMessage();
 
   return (
@@ -169,8 +194,8 @@ const IntegratedAnalysis = ({ tank }) => {
                     {pattern.name}
                   </option>
                 ))}
-                {/* 個別タンクパターン（progressRatesが保存されている場合） */}
-                {selectedModel?.progressData?.tankAnalysis?.filter(tank => tank.progressRates && tank.progressRates.length > 0).map(tank => (
+                {/* 個別タンクパターン */}
+                {selectedModel?.progressData?.tankAnalysis?.map(tank => (
                   <option key={`tank_${tank.tankNumber}`} value={`タンク${tank.tankNumber}`}>
                     タンク{tank.tankNumber}
                   </option>
@@ -181,128 +206,19 @@ const IntegratedAnalysis = ({ tank }) => {
           </div>
         </div>
 
-        {/* 選択されたモデルの詳細表示 */}
-        {selectedModel && (
-          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded">
-            <div 
-              className="flex items-center justify-between cursor-pointer"
-              onClick={() => setIsModelDetailsCollapsed(!isModelDetailsCollapsed)}
-            >
-              <h4 className="font-medium text-blue-800 flex items-center">
-                <Database className="w-4 h-4 mr-1" />
-                読み込み済み統合モデル
-              </h4>
-              {isModelDetailsCollapsed ? (
-                <ChevronDown className="w-4 h-4 text-blue-600" />
-              ) : (
-                <ChevronUp className="w-4 h-4 text-blue-600" />
-              )}
-            </div>
-            
-            {!isModelDetailsCollapsed && (
-              <div className="text-sm space-y-3 mt-2">
-                {/* 基本情報 */}
-                <div className="bg-white p-2 rounded text-xs">
-                  <strong>{selectedModel.name}</strong> ({new Date(selectedModel.savedAt).toLocaleDateString()}) - {selectedModel.sourceTankIds?.length || 0}タンク
-                </div>
-
-                {/* 進捗モデリング */}
-                {selectedModel.progressData?.tankAnalysis && (
-                  <div>
-                    <div className="font-medium text-blue-700 mb-1 flex items-center text-sm">
-                      <BarChart className="w-3 h-3 mr-1" />
-                      BMD進捗パターン分析
-                    </div>
-                    <div className="bg-white p-2 rounded text-xs space-y-1">
-                      <div className="font-medium">個別タンクデータ</div>
-                      {selectedModel.progressData.tankAnalysis.map((tank, idx) => (
-                        <div key={idx} className="ml-1">
-                          <strong>タンク {tank.tankNumber}</strong> 最高BMD: {tank.maxBMD} (第{tank.maxBMDDay}日) → 最終BMD: {tank.finalBMD} (第{tank.finalDay}日)
-                        </div>
-                      ))}
-                      {selectedModel.progressData.patterns && selectedModel.progressData.patterns.length > 0 && (
-                        <div className="border-t pt-1 mt-1">
-                          <div className="font-medium">統合パターン</div>
-                          {selectedModel.progressData.patterns.map((pattern, idx) => (
-                            <div key={idx} className="ml-1">
-                              <strong>{pattern.name}</strong> データ点数: {pattern.data?.length || 0}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* 追い水分析 */}
-                {selectedModel.oisuiData && (
-                  <div>
-                    <div className="font-medium text-blue-700 mb-1 flex items-center text-sm">
-                      <Droplets className="w-3 h-3 mr-1" />
-                      追い水分析統合
-                    </div>
-                    <div className="bg-white p-2 rounded text-xs space-y-1">
-                      {/* 5日目・7日目回帰 */}
-                      {selectedModel.oisuiData.analysis1 && (
-                        <div>
-                          <div className="font-medium">5日目・7日目回帰関数</div>
-                          <div className="ml-1 space-y-0">
-                            {selectedModel.oisuiData.analysis1.day5Regression && (
-                              <div>5日目: y={selectedModel.oisuiData.analysis1.day5Regression.a.toFixed(4)}x+{selectedModel.oisuiData.analysis1.day5Regression.b.toFixed(4)} (R²={selectedModel.oisuiData.analysis1.day5Regression.rSquared.toFixed(3)})</div>
-                            )}
-                            {selectedModel.oisuiData.analysis1.day7Regression && (
-                              <div>7日目: y={selectedModel.oisuiData.analysis1.day7Regression.a.toFixed(4)}x+{selectedModel.oisuiData.analysis1.day7Regression.b.toFixed(4)} (R²={selectedModel.oisuiData.analysis1.day7Regression.rSquared.toFixed(3)})</div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                      {/* 8日目以降 */}
-                      {selectedModel.oisuiData.analysis2?.parameters && (
-                        <div className="border-t pt-1">
-                          <div className="font-medium">8日目以降のパラメータ</div>
-                          <div className="ml-1">
-                            アルコール係数: {selectedModel.oisuiData.analysis2.parameters.alcoholCoeff}, 
-                            アルコール閾値: {selectedModel.oisuiData.analysis2.parameters.targetAlcoholThreshold}%, 
-                            目標ボーメ: {selectedModel.oisuiData.analysis2.parameters.targetBaume}, 
-                            目標アルコール: {selectedModel.oisuiData.analysis2.parameters.targetAlcohol}%
-                          </div>
-                          <div className="ml-1">データ件数: {selectedModel.oisuiData.analysis2.data?.length || 0}件</div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* 品温分析 */}
-                {selectedModel.temperatureData && selectedModel.temperatureData.length > 0 && (
-                  <div>
-                    <div className="font-medium text-blue-700 mb-1 flex items-center text-sm">
-                      <Activity className="w-3 h-3 mr-1" />
-                      品温モデリング
-                    </div>
-                    <div className="bg-white p-2 rounded text-xs">
-                      温度データ件数: {selectedModel.temperatureData.length}件, 
-                      温度範囲: {Math.min(...selectedModel.temperatureData.map(d => d.temp)).toFixed(1)}℃～{Math.max(...selectedModel.temperatureData.map(d => d.temp)).toFixed(1)}℃
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* 選択されたパターンの詳細表示 */}
         {selectedPattern && selectedModel && (
           <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded text-xs">
-            <strong>選択中の進捗パターン:</strong> {selectedPattern}
+            <div><strong>選択中の進捗パターン:</strong> {selectedPattern}</div>
+            
             {(() => {
               // 統合パターンの場合
               const unifiedPattern = selectedModel.progressData.patterns?.find(p => p.name === selectedPattern);
               if (unifiedPattern) {
                 return (
-                  <span className="ml-2">
-                    ({unifiedPattern.method || 'combined'}) データ点数: {unifiedPattern.data?.length || 0}
-                  </span>
+                  <div className="mt-1">
+                    <span>({unifiedPattern.method || 'combined'}) データ点数: {unifiedPattern.data?.length || 0}</span>
+                  </div>
                 );
               }
               
@@ -312,18 +228,139 @@ const IntegratedAnalysis = ({ tank }) => {
                 const tankData = selectedModel.progressData.tankAnalysis?.find(t => t.tankNumber === tankNumber);
                 if (tankData && tankData.progressRates) {
                   return (
-                    <span className="ml-2">
-                      (individual) データ点数: {tankData.progressRates.length}
-                    </span>
+                    <div className="mt-1">
+                      <span>(individual) データ点数: {tankData.progressRates.length}</span>
+                    </div>
+                  );
+                } else if (tankData) {
+                  return (
+                    <div className="mt-1">
+                      <span>(individual) データ点数: 0 (基本データを使用)</span>
+                    </div>
                   );
                 }
               }
               
               return null;
             })()}
+
+            {/* 統合パターンデータ表示 */}
+            <div className="mt-2">
+              <strong>統合パターンデータ:</strong>
+              <div className="mt-1 max-h-32 overflow-y-auto bg-white border rounded p-2 text-xs font-mono">
+                {(() => {
+                  const patternData = getPatternData(selectedPattern, selectedModel);
+                  if (patternData) {
+                    return <pre>{JSON.stringify(patternData, null, 2)}</pre>;
+                  } else {
+                    return <div className="text-gray-500 italic">データが見つかりません</div>;
+                  }
+                })()}
+              </div>
+            </div>
           </div>
         )}
       </div>
+
+      {/* 選択されたモデルの詳細表示 */}
+      {selectedModel && (
+        <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded">
+          <div 
+            className="flex items-center justify-between cursor-pointer"
+            onClick={() => setIsModelDetailsCollapsed(!isModelDetailsCollapsed)}
+          >
+            <h4 className="font-medium text-blue-800 flex items-center">
+              <Database className="w-4 h-4 mr-1" />
+              読み込み済み統合モデル
+            </h4>
+            {isModelDetailsCollapsed ? (
+              <ChevronDown className="w-4 h-4 text-blue-600" />
+            ) : (
+              <ChevronUp className="w-4 h-4 text-blue-600" />
+            )}
+          </div>
+          
+          {!isModelDetailsCollapsed && (
+            <div className="text-sm space-y-3 mt-2">
+              {/* 基本情報 */}
+              <div className="bg-white p-2 rounded text-xs">
+                <strong>{selectedModel.name}</strong> ({new Date(selectedModel.savedAt).toLocaleDateString()}) - {selectedModel.sourceTankIds?.length || 0}タンク
+              </div>
+
+              {/* 進捗モデリング */}
+              {selectedModel.progressData?.tankAnalysis && (
+                <div>
+                  <div className="font-medium text-blue-700 mb-1 flex items-center text-sm">
+                    <BarChart className="w-3 h-3 mr-1" />
+                    BMD進捗パターン分析
+                  </div>
+                  <div className="bg-white p-2 rounded text-xs space-y-1">
+                    <div className="font-medium">個別タンクデータ</div>
+                    {selectedModel.progressData.tankAnalysis.map((tank, idx) => (
+                      <div key={idx} className="ml-1">
+                        <strong>タンク {tank.tankNumber}</strong> 最高BMD: {tank.maxBMD} (第{tank.maxBMDDay}日) → 最終BMD: {tank.finalBMD} (第{tank.finalDay}日)
+                      </div>
+                    ))}
+                    {selectedModel.progressData.patterns && selectedModel.progressData.patterns.length > 0 && (
+                      <div className="border-t pt-1 mt-1">
+                        <div className="font-medium">統合パターン</div>
+                        {selectedModel.progressData.patterns.map((pattern, idx) => (
+                          <div key={idx} className="ml-1">
+                            <strong>{pattern.name}</strong> データ点数: {pattern.data?.length || 0}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 追い水分析 */}
+              {selectedModel.oisui1Data && (
+                <div>
+                  <div className="font-medium text-blue-700 mb-1 flex items-center text-sm">
+                    <Droplets className="w-3 h-3 mr-1" />
+                    追い水分析1（5日目・7日目）
+                  </div>
+                  <div className="bg-white p-2 rounded text-xs space-y-1">
+                    <div>5日目データ: {selectedModel.oisui1Data.day5Data?.length || 0}点</div>
+                    <div>7日目データ: {selectedModel.oisui1Data.day7Data?.length || 0}点</div>
+                    {selectedModel.oisui1Data.day5Regression && (
+                      <div>5日目回帰式: y = {selectedModel.oisui1Data.day5Regression.a.toFixed(3)}x + {selectedModel.oisui1Data.day5Regression.b.toFixed(3)} (R² = {selectedModel.oisui1Data.day5Regression.rSquared.toFixed(3)})</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 追い水分析2 */}
+              {selectedModel.oisui2Data && (
+                <div>
+                  <div className="font-medium text-blue-700 mb-1 flex items-center text-sm">
+                    <Activity className="w-3 h-3 mr-1" />
+                    追い水分析2（8日目以降）
+                  </div>
+                  <div className="bg-white p-2 rounded text-xs">
+                    統合データ: {selectedModel.oisui2Data.length || 0}タンク
+                  </div>
+                </div>
+              )}
+
+              {/* 品温分析 */}
+              {selectedModel.temperatureData && (
+                <div>
+                  <div className="font-medium text-blue-700 mb-1 flex items-center text-sm">
+                    <Activity className="w-3 h-3 mr-1" />
+                    品温変動分析
+                  </div>
+                  <div className="bg-white p-2 rounded text-xs">
+                    温度範囲: {Math.min(...selectedModel.temperatureData.map(d => d.temp)).toFixed(1)}℃～{Math.max(...selectedModel.temperatureData.map(d => d.temp)).toFixed(1)}℃
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* エラーメッセージまたは準備完了メッセージ */}
       {errorMessage ? (

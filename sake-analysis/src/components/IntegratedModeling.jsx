@@ -482,14 +482,14 @@ const IntegratedModeling = ({ tanks = [], selectedTankIds = [] }) => {
         const finalDay = bmdData[bmdData.length - 1].day;
         const fermentationDays = finalDay - maxBMDDay;
         
-        // 進捗率データを計算
-        const progressRates = bmdData.map(point => ({
-          day: point.day,
-          actualDay: point.day,
-          actualBMD: point.bmd,
-          progress: (point.bmd / maxBMD) * 100,
-          normalizedTime: fermentationDays > 0 ? ((point.day - maxBMDDay) / fermentationDays) * 100 : 0
-        }));
+        // 修正版
+const progressRates = bmdData.map(point => ({
+  day: point.day,
+  actualDay: point.day,
+  actualBMD: point.bmd,
+  progress: ((maxBMD - point.bmd) / (maxBMD - finalBMD)) * 100,  // 正しい計算
+  normalizedTime: fermentationDays > 0 ? ((point.day - maxBMDDay) / fermentationDays) * 100 : 0
+}));
         
         tankAnalysis.push({
           tankId: tank.tankId,
@@ -735,6 +735,11 @@ const IntegratedModeling = ({ tanks = [], selectedTankIds = [] }) => {
       // 品温分析のデータ
       temperatureData: analysisData.temperatureData
     };
+
+    // === ここに追加 ===
+  console.log('保存するmodelData:', modelData);
+  console.log('tankAnalysis[0].progressRates:', modelData.progressData?.tankAnalysis?.[0]?.progressRates);
+  // ================
     
     const updatedModels = loadedModelId 
       ? savedModels.map(m => m.id === loadedModelId ? { ...modelData, id: loadedModelId } : m)
