@@ -4,7 +4,7 @@ import TankMetadataForm from './TankMetadataForm';
 import TankListTable from './TankListTable';
 import TankSelector from './TankSelector';
 import DailyDataTable from './DailyDataTable';
-import AnalysisTables from './AnalysisTables';
+import IntegratedAnalysis from './IntegratedAnalysis';
 
 const RealTimeDataEntry = ({ tanks, setTanks, selectedTankIds, setSelectedTankIds }) => {
   // ビューの管理
@@ -173,10 +173,9 @@ const RealTimeDataEntry = ({ tanks, setTanks, selectedTankIds, setSelectedTankId
               />
             </div>
             
-            {/* 分析表示 */}
-            <AnalysisTables
+            {/* リアルタイム統合分析 */}
+            <IntegratedAnalysis
               tank={selectedTankForEdit}
-              allTanks={tanks}
             />
           </div>
         ) : null;

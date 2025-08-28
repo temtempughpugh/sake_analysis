@@ -149,14 +149,12 @@ const DailyDataTable = ({ tank, onUpdate }) => {
     }
 
     // 線形補間
-    if (prevDay !== null && nextDay !== null) {
-      const ratio = (dayNum - prevDay) / (nextDay - prevDay);
-      return prevValue + (nextValue - prevValue) * ratio;
-    }
+  // 線形補間 - 前後両方にデータがある場合のみ
+if (prevDay !== null && nextDay !== null && prevValue !== null && nextValue !== null) {
+  const ratio = (dayNum - prevDay) / (nextDay - prevDay);
+  return prevValue + (nextValue - prevValue) * ratio;
+}
 
-    // 前後どちらかしかない場合はその値を使用
-    if (prevValue !== null) return prevValue;
-    if (nextValue !== null) return nextValue;
 
     return null;
   };
