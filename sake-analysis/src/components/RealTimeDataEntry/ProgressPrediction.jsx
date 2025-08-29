@@ -11,6 +11,98 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
   const [idealCurve, setIdealCurve] = useState([]);
   const [currentStatus, setCurrentStatus] = useState(null);
   const [predictionResult, setPredictionResult] = useState(null);
+  const [convergenceDay, setConvergenceDay] = useState(16); // 目標合流日
+  const [convergenceResult, setConvergenceResult] = useState(null);
+  const [lastUpdateTime, setLastUpdateTime] = useState(null);
+
+  // 弓なりカーブ収束計算（理想曲線への合流）
+  const calculateConvergenceCurve = (currentStatus, idealCurve, targetDay, bulgeFactor = 0.15) => {
+    if (!currentStatus || !idealCurve) return null;
+
+    const startPoint = currentStatus.day;
+    const currentValue = parseFloat(currentStatus.actualBMD);
+    const targetPoint = targetDay;
+    
+    // 理想曲線の指定日の値を取得
+    const targetIdealPoint = idealCurve.find(p => p.day === targetDay);
+    if (!targetIdealPoint) return null;
+    
+    const targetValue = parseFloat(targetIdealPoint.idealBMD);
+
+    if (targetPoint <= startPoint || targetValue >= currentValue) {
+      return null; // 制約条件チェック
+    }
+
+    // 3点円弧法による計算
+    const x1 = startPoint, y1 = currentValue;
+    const x3 = targetPoint, y3 = targetValue;
+    const x2 = (x1 + x3) / 2;
+    const y_linear = y1 + (y3 - y1) * 0.5;
+    const y2 = y_linear + (y1 - y3) * bulgeFactor;
+
+    // 円の中心と半径を計算
+    const denom = 2 * ((x2 - x1) * (y3 - y2) - (y2 - y1) * (x3 - x2));
+    if (Math.abs(denom) < 1e-10) return null; // 一直線チェック
+
+    const h = ((x2*x2 + y2*y2 - x1*x1 - y1*y1) * (y3 - y2) - (x3*x3 + y3*y3 - x2*x2 - y2*y2) * (y2 - y1)) / denom;
+    const k = ((x3*x3 + y3*y3 - x2*x2 - y2*y2) * (x2 - x1) - (x2*x2 + y2*y2 - x1*x1 - y1*y1) * (x3 - x2)) / denom;
+    const r = Math.sqrt((x1 - h) * (x1 - h) + (y1 - k) * (y1 - k));
+
+    console.log('合流計算デバッグ:', { 
+      start: { x: x1, y: y1 }, 
+      target: { x: x3, y: y3 }, 
+      control: { x: x2, y: y2 },
+      center: { h, k }, 
+      radius: r 
+    });
+
+    // 軌道点群生成
+    const convergenceData = [];
+    for (let day = startPoint + 1; day <= targetPoint; day++) {
+      const discriminant = r * r - (day - h) * (day - h);
+      if (discriminant >= 0) {
+        const y_pos = k + Math.sqrt(discriminant);
+        const y_neg = k - Math.sqrt(discriminant);
+        
+        // より確実な符号選択：開始点と終点の範囲内にある値を選択
+        let y;
+        if (Math.abs(y_pos - y1) <= Math.abs(y_neg - y1) && 
+            y_pos >= Math.min(y1, y3) && y_pos <= Math.max(y1, y3)) {
+          y = y_pos;
+        } else if (y_neg >= Math.min(y1, y3) && y_neg <= Math.max(y1, y3)) {
+          y = y_neg;
+        } else {
+          // 線形補間にフォールバック
+          y = y1 + (y3 - y1) * (day - x1) / (x3 - x1);
+        }
+        
+        const baume = (y / day).toFixed(3);
+        
+        convergenceData.push({
+          day,
+          predictedBMD: y.toFixed(2),
+          predictedBaume: baume
+        });
+      } else {
+        // discriminantが負の場合は線形補間
+        const y = y1 + (y3 - y1) * (day - x1) / (x3 - x1);
+        const baume = (y / day).toFixed(3);
+        
+        convergenceData.push({
+          day,
+          predictedBMD: y.toFixed(2),
+          predictedBaume: baume
+        });
+      }
+    }
+
+    return {
+      name: `理想曲線合流（${targetDay}日目）`,
+      data: convergenceData,
+      completionDay: targetPoint,
+      targetValue: targetValue.toFixed(2)
+    };
+  };
 
   // 基準設定の自動取得
   const getBaseSettings = (tank) => {
@@ -324,11 +416,11 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
     };
   };
 
-  // データが変更されたら再計算
-  useEffect(() => {
+  // 分析を手動で更新する関数
+  const handleUpdateAnalysis = () => {
     if (!tank || !selectedModel || !selectedPattern) return;
 
-    console.log('再計算開始:', { tankId: tank.tankId, selectedPattern });
+    console.log('手動更新実行:', { tankId: tank.tankId, selectedPattern });
 
     // 基準設定を取得
     const settings = getBaseSettings(tank);
@@ -351,8 +443,20 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
     if (status) {
       const prediction = calculatePrediction(tank, settings, curve, status);
       setPredictionResult(prediction);
+
+      // 合流パターンを計算
+      const convergence = calculateConvergenceCurve(status, curve, convergenceDay);
+      setConvergenceResult(convergence);
     }
-  }, [tank, selectedModel, selectedPattern]);
+
+    // 最終更新時刻を記録
+    setLastUpdateTime(new Date());
+  };
+
+  // データが変更されたら再計算（tank.dailyDataを依存配列から削除）
+  useEffect(() => {
+    handleUpdateAnalysis();
+  }, [tank, selectedModel, selectedPattern, convergenceDay]);
 
   // エラーメッセージの判定
   const getErrorMessage = () => {
@@ -509,6 +613,23 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
       });
     }
 
+    // 合流パターン - オレンジ色実線
+    if (convergenceResult?.data?.length > 0) {
+      datasets.push({
+        label: `合流（${convergenceDay}日目）`,
+        data: convergenceResult.data.map(p => ({ 
+          x: p.day, 
+          y: parseFloat(p.predictedBMD) 
+        })),
+        borderColor: '#F97316',
+        backgroundColor: '#F97316',
+        borderWidth: 3,
+        fill: false,
+        tension: 0.1,
+        pointRadius: 3
+      });
+    }
+
     return { datasets };
   };
 
@@ -566,8 +687,23 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
     );
   }
 
-  return (
+      return (
     <div className="space-y-6">
+      {/* 更新ボタンと最終更新時刻 */}
+      <div className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
+        <div className="text-sm text-gray-600">
+          {lastUpdateTime && (
+            <span>最終データ更新: {lastUpdateTime.toLocaleString()}</span>
+          )}
+        </div>
+        <button
+          onClick={handleUpdateAnalysis}
+          disabled={!tank || !selectedModel || !selectedPattern}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-sm font-medium"
+        >
+          分析を更新
+        </button>
+      </div>
       {/* 現在の進捗状況 */}
       {currentStatus && (
         <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -608,89 +744,10 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
               </span>
             </div>
           </div>
-        </div>
-      )}
 
-      {/* BMD推移グラフ */}
-      {(idealCurve.length > 0 || Object.keys(tank.dailyData || {}).length > 0) && (
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <h3 className="text-lg font-semibold mb-3 flex items-center">
-            <TrendingUp className="w-5 h-5 mr-2" />
-            BMD推移グラフ
-          </h3>
-          <div className="h-80">
-            <Line data={getChartData()} options={chartOptions} />
-          </div>
-        </div>
-      )}
-
-      {/* 理想発酵進捗表 */}
-      {idealCurve.length > 0 && (
-        <div className="bg-white rounded-lg border border-gray-200">
-          <div className="px-4 py-3 border-b border-gray-200">
-            <h3 className="text-lg font-semibold flex items-center">
-              <TrendingUp className="w-5 h-5 mr-2" />
-              理想発酵進捗表
-            </h3>
-          </div>
-          
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-3 py-2 text-center font-medium text-gray-700">日数</th>
-                  <th className="px-3 py-2 text-center font-medium text-gray-700">発酵進行度</th>
-                  <th className="px-3 py-2 text-center font-medium text-gray-700">完了率</th>
-                  <th className="px-3 py-2 text-center font-medium text-gray-700">理想BMD</th>
-                  <th className="px-3 py-2 text-center font-medium text-gray-700">理想ボーメ</th>
-                  {currentStatus && <th className="px-3 py-2 text-center font-medium text-gray-700">実測との差</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {idealCurve.slice(0, 10).map((point) => {
-                  const isCurrentDay = currentStatus && point.day === currentStatus.day;
-                  const actualData = tank.dailyData[`day_${point.day}`];
-                  const actualBMD = actualData ? parseFloat(actualData[COLUMN_NAMES.DAILY.BMD_COMPLEMENT]) : null;
-                  const difference = actualBMD ? (actualBMD - parseFloat(point.idealBMD)).toFixed(2) : null;
-                  
-                  return (
-                    <tr key={point.day} className={isCurrentDay ? 'bg-blue-50' : ''}>
-                      <td className="px-3 py-2 text-center font-medium">
-                        {point.day}
-                        {isCurrentDay && <span className="ml-1 text-blue-600 text-xs">現在</span>}
-                      </td>
-                      <td className="px-3 py-2 text-center">{point.fermentationProgress}%</td>
-                      <td className="px-3 py-2 text-center">{point.progressRate}%</td>
-                      <td className="px-3 py-2 text-center">{point.idealBMD}</td>
-                      <td className="px-3 py-2 text-center">{point.idealBaume}</td>
-                      {currentStatus && (
-                        <td className="px-3 py-2 text-center">
-                          {difference ? (
-                            <span className={
-                              parseFloat(difference) > 0.5 ? 'text-red-600 font-medium' :
-                              parseFloat(difference) < -0.5 ? 'text-blue-600 font-medium' :
-                              'text-green-600'
-                            }>
-                              {parseFloat(difference) > 0 ? '+' : ''}{difference}
-                            </span>
-                          ) : '-'}
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* 予測表（パターンA/B）with サマリーカード */}
-      {predictionResult && (
-        <div className="space-y-4">
           {/* 予測サマリーカード */}
-          {currentStatus && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {predictionResult && (
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
               <div className={`p-4 rounded-lg border ${
                 currentStatus.status === '順調' ? 'bg-green-50 border-green-200' :
                 currentStatus.status === '遅れ' || currentStatus.status === '大幅遅れ' ? 
@@ -728,58 +785,158 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
                     '計算中'}度
                 </div>
               </div>
+
+              <div className="bg-orange-50 border border-orange-200 p-4 rounded-lg">
+                <div className="font-medium">理想曲線合流</div>
+                <div className="flex items-center space-x-2 mb-2">
+                  <input
+                    type="number"
+                    value={convergenceDay}
+                    onChange={(e) => setConvergenceDay(parseInt(e.target.value))}
+                    min={currentStatus ? currentStatus.day + 1 : 10}
+                    max={baseSettings ? baseSettings.finalDay : 28}
+                    className="w-16 px-2 py-1 text-sm border border-orange-300 rounded"
+                  />
+                  <span className="text-sm">日目に合流</span>
+                </div>
+                <div className="text-sm text-gray-600">
+                  {convergenceResult ? `目標値: ${convergenceResult.targetValue}` : '理想曲線に弓なり合流'}
+                </div>
+              </div>
             </div>
           )}
+        </div>
+      )}
 
-          {/* 予測詳細表 */}
-          <div className="bg-white rounded-lg border border-gray-200">
-            <div className="px-4 py-3 border-b border-gray-200">
-              <h3 className="text-lg font-semibold flex items-center">
-                <Activity className="w-5 h-5 mr-2" />
-                予測詳細表
-              </h3>
-            </div>
-            
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-3 py-2 text-center font-medium text-gray-700">日数</th>
-                    <th className="px-3 py-2 text-center font-medium text-gray-700 text-red-600">パターンA<br/>（現状ペース継続）</th>
-                    <th className="px-3 py-2 text-center font-medium text-gray-700 text-purple-600">パターンB<br/>（目標日数厳守）</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {Array.from({ length: Math.min(10, Math.max(
-                    predictionResult.patternA.data.length, 
-                    predictionResult.patternB.data.length
-                  )) }).map((_, index) => {
-                    const patternAData = predictionResult.patternA.data[index];
-                    const patternBData = predictionResult.patternB.data[index];
-                    const day = patternAData?.day || patternBData?.day;
-                    
-                    return (
-                      <tr key={day}>
-                        <td className="px-3 py-2 text-center font-medium">{day}日</td>
-                        <td className="px-3 py-2 text-center text-red-700 font-mono">
-                          {patternAData ? `${patternAData.predictedBMD} / ${patternAData.predictedBaume}` : '-'}
-                        </td>
-                        <td className="px-3 py-2 text-center text-purple-700 font-mono">
-                          {patternBData ? `${patternBData.predictedBMD} / ${patternBData.predictedBaume}` : '-'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            
-            <div className="px-4 py-3 border-t border-gray-200 text-xs text-gray-600 space-y-1">
-              <div><strong>統合モデル活用:</strong> {selectedModel.name} ({selectedPattern})</div>
-              <div><strong>パターンA:</strong> 現在の進捗差を維持した場合の予測</div>
-              <div><strong>パターンB:</strong> 目標上槽日に合わせた理想的な進捗予測</div>
-            </div>
+      {/* BMD推移グラフ */}
+      {(idealCurve.length > 0 || Object.keys(tank.dailyData || {}).length > 0) && (
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <h3 className="text-lg font-semibold mb-3 flex items-center">
+            <TrendingUp className="w-5 h-5 mr-2" />
+            BMD推移グラフ
+          </h3>
+          <div className="h-80">
+            <Line data={getChartData()} options={chartOptions} />
           </div>
+        </div>
+      )}
+
+      {/* 理想発酵進捗表 */}
+      {idealCurve.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200">
+          <div className="px-4 py-3 border-b border-gray-200">
+            <h3 className="text-lg font-semibold flex items-center">
+              <TrendingUp className="w-5 h-5 mr-2" />
+              理想発酵進捗表
+            </h3>
+          </div>
+          
+          <div className="overflow-x-auto max-h-80">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50 sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-center font-medium text-gray-700">日数</th>
+                  <th className="px-3 py-2 text-center font-medium text-gray-700">発酵進行度</th>
+                  <th className="px-3 py-2 text-center font-medium text-gray-700">完了率</th>
+                  <th className="px-3 py-2 text-center font-medium text-green-700">理想</th>
+                  <th className="px-3 py-2 text-center font-medium text-blue-700">実測</th>
+                  <th className="px-3 py-2 text-center font-medium text-orange-700">合流</th>
+                  <th className="px-3 py-2 text-center font-medium text-orange-600">合流との差</th>
+                  <th className="px-3 py-2 text-center font-medium text-red-700">A</th>
+                  <th className="px-3 py-2 text-center font-medium text-purple-700">B</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {idealCurve.map((point) => {
+                  const isCurrentDay = currentStatus && point.day === currentStatus.day;
+                  const actualData = tank.dailyData[`day_${point.day}`];
+                  const actualBMD = actualData ? parseFloat(actualData[COLUMN_NAMES.DAILY.BMD_COMPLEMENT]) : null;
+                  const actualBaume = actualBMD ? (actualBMD / point.day).toFixed(3) : null;
+                  
+                  // パターンA/B/合流データ取得
+                  const patternAData = predictionResult?.patternA.data.find(p => p.day === point.day);
+                  const patternBData = predictionResult?.patternB.data.find(p => p.day === point.day);
+                  const convergenceData = convergenceResult?.data.find(p => p.day === point.day);
+                  
+                  // 合流との差を計算①②（翌日/翌々日合流-実測当日で算出）
+                  let convergenceDifference = null;
+                  if (actualBMD && actualBaume && convergenceResult) {
+                    // ①翌日合流 - 実測当日
+                    const nextDayConvergence = convergenceResult.data.find(p => p.day === point.day + 1);
+                    // ②翌々日合流 - 実測当日
+                    const dayAfterNextConvergence = convergenceResult.data.find(p => p.day === point.day + 2);
+                    
+                    if (nextDayConvergence && dayAfterNextConvergence) {
+                      const diffBMD1 = parseFloat(nextDayConvergence.predictedBMD) - actualBMD;
+                      const diffBaume1 = parseFloat(nextDayConvergence.predictedBaume) - parseFloat(actualBaume);
+                      const diffBMD2 = parseFloat(dayAfterNextConvergence.predictedBMD) - actualBMD;
+                      const diffBaume2 = parseFloat(dayAfterNextConvergence.predictedBaume) - parseFloat(actualBaume);
+                      
+                      const diff1 = `${diffBMD1.toFixed(2)} / ${diffBaume1.toFixed(3)}`;
+                      const diff2 = `${diffBMD2.toFixed(2)} / ${diffBaume2.toFixed(3)}`;
+                      convergenceDifference = { diff1, diff2 };
+                    }
+                  }
+                  
+                  return (
+                    <tr key={point.day} className={isCurrentDay ? 'bg-blue-50' : ''}>
+                      <td className="px-3 py-2 text-center font-medium">
+                        {point.day}
+                        {isCurrentDay && <span className="ml-1 text-blue-600 text-xs">現在</span>}
+                      </td>
+                      <td className="px-3 py-2 text-center">{point.fermentationProgress}%</td>
+                      <td className="px-3 py-2 text-center">{point.progressRate}%</td>
+                      <td className="px-3 py-2 text-center text-green-700 font-mono">
+                        {point.idealBMD} / {point.idealBaume}
+                      </td>
+                      <td className="px-3 py-2 text-center text-blue-700 font-mono">
+                        {actualBMD && actualBaume ? `${actualBMD.toFixed(2)} / ${actualBaume}` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-center text-orange-700 font-mono">
+                        {convergenceData ? `${convergenceData.predictedBMD} / ${convergenceData.predictedBaume}` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-center text-orange-600 font-mono">
+                        {convergenceDifference ? (
+                          <div className="text-xs leading-tight">
+                            <div className={
+                              parseFloat(convergenceDifference.diff1.split(' / ')[0]) > 0 ? 'text-red-600 font-medium' :
+                              parseFloat(convergenceDifference.diff1.split(' / ')[0]) < 0 ? 'text-blue-600 font-medium' :
+                              'text-green-600'
+                            }>
+                              ①{parseFloat(convergenceDifference.diff1.split(' / ')[0]) > 0 ? '+' : ''}{convergenceDifference.diff1}
+                            </div>
+                            <div className={
+                              parseFloat(convergenceDifference.diff2.split(' / ')[0]) > 0 ? 'text-red-600 font-medium' :
+                              parseFloat(convergenceDifference.diff2.split(' / ')[0]) < 0 ? 'text-blue-600 font-medium' :
+                              'text-green-600'
+                            }>
+                              ②{parseFloat(convergenceDifference.diff2.split(' / ')[0]) > 0 ? '+' : ''}{convergenceDifference.diff2}
+                            </div>
+                          </div>
+                        ) : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-center text-red-700 font-mono">
+                        {patternAData ? `${patternAData.predictedBMD} / ${patternAData.predictedBaume}` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-center text-purple-700 font-mono">
+                        {patternBData ? `${patternBData.predictedBMD} / ${patternBData.predictedBaume}` : '-'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-4 py-3 border-t border-gray-200 text-xs text-gray-600 space-y-1">
+            <div><strong>パターンA:</strong> 現在の進捗差を維持した場合の予測</div>
+            <div><strong>パターンB:</strong> 目標上槽日に合わせた理想的な進捗予測</div>
+          </div>
+        </div>
+      )}
+
+      {/* 予測表（パターンA/B）with サマリーカード */}
+      {predictionResult && (
+        <div className="space-y-4">
         </div>
       )}
     </div>
