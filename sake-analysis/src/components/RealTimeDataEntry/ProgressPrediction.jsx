@@ -62,59 +62,53 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
 
     console.log('理想曲線計算パラメータ:', { maxBMD, maxBMDDay, finalBMD, finalDay, selectedPattern });
 
-    // 個別タンクパターンの処理
-    if (selectedPattern && selectedPattern.includes('個別')) {
-      // 個別タンクデータを取得
+    // 個別タンクパターンの場合
+    if (selectedPattern && selectedPattern.startsWith('タンク')) {
+      const tankNumber = selectedPattern.replace('タンク', '');
+      
+      console.log('=== 個別タンク検索デバッグ ===');
+      console.log('selectedPattern:', selectedPattern);
+      console.log('tankNumber:', tankNumber, 'typeof:', typeof tankNumber);
+      console.log('selectedModel.progressData.tankAnalysis:', selectedModel.progressData?.tankAnalysis);
+      
       const individualTankData = selectedModel.progressData?.tankAnalysis?.find(tank => 
-        selectedPattern.includes(tank.tankNumber) || selectedPattern.includes(tank.tankId)
+        tank.tankNumber.toString() === tankNumber
       );
       
-      console.log('個別タンクデータ:', individualTankData);
+      console.log('individualTankData:', individualTankData);
+      console.log('individualTankData.progressRates:', individualTankData?.progressRates);
+      console.log('===============================');
       
       if (individualTankData && individualTankData.progressRates) {
         console.log('個別タンクのprogressRatesを使用:', individualTankData.progressRates.length, '点');
         
-        // 個別タンクのprogressRatesを使用
+        // 個別タンクデータを統合パターン形式に変換
+        const individualPattern = {
+          data: individualTankData.progressRates.map(p => ({
+            x: p.normalizedTime, // 発酵進行度
+            y: p.progress        // 進捗率
+          }))
+        };
+
+        console.log('変換された個別パターンデータ:', individualPattern.data);
+
+        // 統合パターンと同じロジックで処理
         for (let day = maxBMDDay; day <= finalDay; day++) {
-          // 発酵進行度計算
-          const fermentationProgress = finalDay > maxBMDDay 
-            ? ((day - maxBMDDay) / (finalDay - maxBMDDay)) * 100 
-            : 0;
-
-          // progressRatesから対応する進捗率を取得
-          let progressRate = 0;
-          const progressPoint = individualTankData.progressRates.find(p => p.day === day);
-          if (progressPoint) {
-            progressRate = progressPoint.progress;
-          } else {
-            // 線形補間で進捗率を計算
-            const beforePoint = individualTankData.progressRates
-              .filter(p => p.day <= day)
-              .sort((a, b) => b.day - a.day)[0];
-            const afterPoint = individualTankData.progressRates
-              .filter(p => p.day >= day)
-              .sort((a, b) => a.day - b.day)[0];
-
-            if (beforePoint && afterPoint && beforePoint.day !== afterPoint.day) {
-              const ratio = (day - beforePoint.day) / (afterPoint.day - beforePoint.day);
-              progressRate = beforePoint.progress + (afterPoint.progress - beforePoint.progress) * ratio;
-            } else if (beforePoint) {
-              progressRate = beforePoint.progress;
-            } else if (afterPoint) {
-              progressRate = afterPoint.progress;
-            }
-          }
-
-          // 理想BMD計算
+          // 発酵進行度を計算
+          const fermentationProgress = ((day - maxBMDDay) / (finalDay - maxBMDDay)) * 100;
+          
+          // パターンから進捗率を線形補間で取得（統合パターンと同じ関数を使用）
+          const progressRate = interpolateProgressFromPattern(fermentationProgress, individualPattern);
+          
+          // 理想BMD = 最高BMD - (最高BMD - 最終BMD) × (進捗率 / 100)
           const idealBMD = maxBMD - (maxBMD - finalBMD) * (progressRate / 100);
-          const idealBaume = (idealBMD / day).toFixed(3);
-
+          
           curve.push({
             day,
             fermentationProgress: fermentationProgress.toFixed(1),
             progressRate: progressRate.toFixed(1),
             idealBMD: idealBMD.toFixed(2),
-            idealBaume
+            idealBaume: (idealBMD / day).toFixed(3)
           });
         }
       } else {
@@ -140,7 +134,7 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
         }
       }
     } 
-    // 統合パターンの処理
+    // 統合パターンの場合（既存のロジック）
     else {
       // 統合パターンを取得
       const pattern = selectedModel.progressData?.patterns?.find(p => p.name === selectedPattern);
@@ -213,9 +207,14 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
       return null;
     }
 
-    // 実測データから最新の日数とBMDを取得
+    // 実測データから最新の日数とBMDを取得（BMDデータが実際に存在する日のみ）
     const dailyDataEntries = Object.entries(tank.dailyData || {})
-      .filter(([key, value]) => key.startsWith('day_') && value?.[COLUMN_NAMES.DAILY.BMD_COMPLEMENT] != null)
+      .filter(([key, value]) => 
+        key.startsWith('day_') && 
+        value?.[COLUMN_NAMES.DAILY.BMD_COMPLEMENT] != null &&
+        value[COLUMN_NAMES.DAILY.BMD_COMPLEMENT] !== '' &&
+        !isNaN(parseFloat(value[COLUMN_NAMES.DAILY.BMD_COMPLEMENT]))
+      )
       .map(([key, value]) => ({
         day: parseInt(key.replace('day_', '')),
         bmd: parseFloat(value[COLUMN_NAMES.DAILY.BMD_COMPLEMENT])
@@ -355,6 +354,84 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
     }
   }, [tank, selectedModel, selectedPattern]);
 
+  // エラーメッセージの判定
+  const getErrorMessage = () => {
+    const errors = [];
+
+    if (!tank) {
+      errors.push('タンクが選択されていません');
+      return errors;
+    }
+
+    if (!selectedModel || !selectedPattern) {
+      errors.push('統合モデルとパターンを選択してください');
+      return errors;
+    }
+
+    // 詳細なデータ不足チェック
+    console.log('=== データ不足チェック ===');
+    console.log('tank.metadata:', tank.metadata);
+    console.log('tank.dailyData:', tank.dailyData);
+
+    if (!tank.metadata?.['目標ボーメ']) {
+      errors.push(`目標ボーメが設定されていません (現在値: ${tank.metadata?.['目標ボーメ']})`);
+    }
+
+    if (!tank.metadata?.['仕込み日']) {
+      errors.push(`仕込み日が設定されていません (現在値: ${tank.metadata?.['仕込み日']})`);
+    }
+
+    if (!tank.metadata?.['上槽日']) {
+      errors.push(`上槽日が設定されていません (現在値: ${tank.metadata?.['上槽日']})`);
+    }
+
+    if (!tank.dailyData || Object.keys(tank.dailyData).length === 0) {
+      errors.push('日次データがありません');
+    } else {
+      // 日次データの詳細チェック
+      const dailyKeys = Object.keys(tank.dailyData);
+      console.log('利用可能な日次データキー:', dailyKeys);
+      
+      const bmdDataCount = dailyKeys.filter(key => 
+        key.startsWith('day_') && 
+        tank.dailyData[key] && 
+        tank.dailyData[key][COLUMN_NAMES.DAILY.BMD_COMPLEMENT] != null
+      ).length;
+      
+      console.log('BMD補完データがある日数:', bmdDataCount);
+      
+      if (bmdDataCount === 0) {
+        errors.push('BMD補完データがありません');
+      } else {
+        console.log('BMD補完データ例:', Object.entries(tank.dailyData)
+          .filter(([key, data]) => 
+            key.startsWith('day_') && 
+            data && 
+            data[COLUMN_NAMES.DAILY.BMD_COMPLEMENT] != null
+          )
+          .slice(0, 3)
+          .map(([key, data]) => ({ 
+            日: key, 
+            BMD: data[COLUMN_NAMES.DAILY.BMD_COMPLEMENT] 
+          }))
+        );
+      }
+    }
+
+    // 基準設定チェック
+    const baseSettings = getBaseSettings(tank);
+    console.log('基準設定計算結果:', baseSettings);
+    
+    if (!baseSettings) {
+      errors.push('基準設定の計算に失敗しました（最高BMDが検出できません）');
+    }
+
+    console.log('最終エラー一覧:', errors);
+    console.log('========================');
+
+    return errors.length > 0 ? errors : null;
+  };
+
   // チャートデータの作成
   const getChartData = () => {
     const datasets = [];
@@ -464,35 +541,6 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
         }
       }
     }
-  };
-
-  // エラーメッセージの判定
-  const getErrorMessage = () => {
-    const errors = [];
-
-    if (!tank) {
-      errors.push('タンクが選択されていません');
-      return errors;
-    }
-
-    if (!selectedModel || !selectedPattern) {
-      errors.push('統合モデルとパターンを選択してください');
-      return errors;
-    }
-
-    if (!tank.metadata?.['目標ボーメ']) {
-      errors.push('目標ボーメが設定されていません');
-    }
-
-    if (!tank.metadata?.['仕込み日'] || !tank.metadata?.['上槽日']) {
-      errors.push('仕込み日または上槽日が設定されていません');
-    }
-
-    if (!tank.dailyData || Object.keys(tank.dailyData).length === 0) {
-      errors.push('日次データがありません');
-    }
-
-    return errors.length > 0 ? errors : null;
   };
 
   const errorMessages = getErrorMessage();
@@ -638,48 +686,50 @@ const ProgressPrediction = ({ tank, selectedModel, selectedPattern }) => {
       )}
 
       {/* 予測表（パターンA/B）with サマリーカード */}
-      {predictionResult && currentStatus && (
+      {predictionResult && (
         <div className="space-y-4">
           {/* 予測サマリーカード */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className={`p-4 rounded-lg border ${
-              currentStatus.status === '順調' ? 'bg-green-50 border-green-200' :
-              currentStatus.status === '遅れ' || currentStatus.status === '大幅遅れ' ? 
-              'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'
-            }`}>
-              <div className="font-medium">現在の状況</div>
-              <div className="text-lg">
-                BMD差分: {parseFloat(currentStatus.difference) > 0 ? '+' : ''}{currentStatus.difference}
+          {currentStatus && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className={`p-4 rounded-lg border ${
+                currentStatus.status === '順調' ? 'bg-green-50 border-green-200' :
+                currentStatus.status === '遅れ' || currentStatus.status === '大幅遅れ' ? 
+                'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'
+              }`}>
+                <div className="font-medium">現在の状況</div>
+                <div className="text-lg">
+                  BMD差分: {parseFloat(currentStatus.difference) > 0 ? '+' : ''}{currentStatus.difference}
+                </div>
+                <div className="text-sm">
+                  状態: {currentStatus.status}
+                </div>
               </div>
-              <div className="text-sm">
-                状態: {currentStatus.status}
+              
+              <div className="bg-red-50 border border-red-200 p-4 rounded-lg">
+                <div className="font-medium">現状ペース継続</div>
+                <div className="text-lg">
+                  {predictionResult.patternA.completionDay}日目完成予定
+                </div>
+                <div className="text-sm text-gray-600">
+                  最終ボーメ: {predictionResult.patternA.data.length > 0 ? 
+                    predictionResult.patternA.data[predictionResult.patternA.data.length - 1].predictedBaume : 
+                    '計算中'}度
+                </div>
+              </div>
+              
+              <div className="bg-purple-50 border border-purple-200 p-4 rounded-lg">
+                <div className="font-medium">目標日数厳守</div>
+                <div className="text-lg">
+                  {predictionResult.patternB.completionDay}日目完成
+                </div>
+                <div className="text-sm text-gray-600">
+                  最終ボーメ: {predictionResult.patternB.data.length > 0 ?
+                    predictionResult.patternB.data[predictionResult.patternB.data.length - 1].predictedBaume :
+                    '計算中'}度
+                </div>
               </div>
             </div>
-            
-            <div className="bg-red-50 border border-red-200 p-4 rounded-lg">
-              <div className="font-medium">現状ペース継続</div>
-              <div className="text-lg">
-                {predictionResult.patternA.completionDay}日目完成予定
-              </div>
-              <div className="text-sm text-gray-600">
-                最終ボーメ: {predictionResult.patternA.data.length > 0 ? 
-                  predictionResult.patternA.data[predictionResult.patternA.data.length - 1].predictedBaume : 
-                  '計算中'}度
-              </div>
-            </div>
-            
-            <div className="bg-purple-50 border border-purple-200 p-4 rounded-lg">
-              <div className="font-medium">目標日数厳守</div>
-              <div className="text-lg">
-                {predictionResult.patternB.completionDay}日目完成
-              </div>
-              <div className="text-sm text-gray-600">
-                最終ボーメ: {predictionResult.patternB.data.length > 0 ?
-                  predictionResult.patternB.data[predictionResult.patternB.data.length - 1].predictedBaume :
-                  '計算中'}度
-              </div>
-            </div>
-          </div>
+          )}
 
           {/* 予測詳細表 */}
           <div className="bg-white rounded-lg border border-gray-200">

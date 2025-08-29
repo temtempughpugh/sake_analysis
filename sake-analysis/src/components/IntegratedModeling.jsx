@@ -483,13 +483,16 @@ const IntegratedModeling = ({ tanks = [], selectedTankIds = [] }) => {
         const fermentationDays = finalDay - maxBMDDay;
         
         // 修正版
-const progressRates = bmdData.map(point => ({
-  day: point.day,
-  actualDay: point.day,
-  actualBMD: point.bmd,
-  progress: ((maxBMD - point.bmd) / (maxBMD - finalBMD)) * 100,  // 正しい計算
-  normalizedTime: fermentationDays > 0 ? ((point.day - maxBMDDay) / fermentationDays) * 100 : 0
-}));
+const progressRates = bmdData
+  .filter(point => point.day >= maxBMDDay)  // 最高BMD日以降のみ
+  .map(point => ({
+    day: point.day,
+    actualDay: point.day,
+    actualBMD: point.bmd,
+    progress: ((maxBMD - point.bmd) / (maxBMD - finalBMD)) * 100,
+    normalizedTime: fermentationDays > 0 ? 
+      ((point.day - maxBMDDay) / fermentationDays) * 100 : 0
+  }));
         
         tankAnalysis.push({
           tankId: tank.tankId,
